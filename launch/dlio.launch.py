@@ -20,8 +20,8 @@ def generate_launch_description():
 
     # Set default arguments
     rviz = LaunchConfiguration('rviz', default='false')
-    pointcloud_topic = LaunchConfiguration('pointcloud_topic', default='points_raw')
-    imu_topic = LaunchConfiguration('imu_topic', default='imu_raw')
+    pointcloud_topic = LaunchConfiguration('pointcloud_topic', default='/luminar_front_points')
+    imu_topic = LaunchConfiguration('imu_topic', default='/gps_bot/imu')
 
     # Define arguments
     declare_rviz_arg = DeclareLaunchArgument(
@@ -54,7 +54,7 @@ def generate_launch_description():
             ('pointcloud', pointcloud_topic),
             ('imu', imu_topic),
             ('odom', 'dlio/odom_node/odom'),
-            ('pose', 'dlio/odom_node/pose'),
+            ('pose', 'dlio/odom_node/pose'), #dlio/odom_node/pose filtered_publisher/pose
             ('path', 'dlio/odom_node/path'),
             ('kf_pose', 'dlio/odom_node/keyframes'),
             ('kf_cloud', 'dlio/odom_node/pointcloud/keyframe'),
