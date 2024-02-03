@@ -58,7 +58,9 @@ roslaunch direct_lidar_inertial_odometry dlio.launch \
 ROS2:
 ```sh
 ros2 launch direct_lidar_inertial_odometry dlio.launch.py \
-  rviz:={true, false}
+  rviz:={true, false} \
+  pointcloud_topic:=/luminar_front_points \
+  imu_topic:=/gps_bot/imu
 ```
 
 Be sure to change the topic names to your corresponding topics. Alternatively, edit the launch file directly if desired. If successful, you should see the following output in your terminal:
