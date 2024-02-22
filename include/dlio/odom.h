@@ -16,6 +16,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/pose_array.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -56,6 +57,8 @@ private:
 
   void callbackPointCloud(const sensor_msgs::msg::PointCloud2::SharedPtr pc);
   void callbackImu(const sensor_msgs::msg::Imu::SharedPtr imu);
+  void callbackGpsPose(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr gps);
+  void callbackGpsOrientation(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr gps);
 
   void publishPose();
 
@@ -113,7 +116,9 @@ private:
   // Subscribers
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_sub;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub;
-  rclcpp::CallbackGroup::SharedPtr lidar_cb_group, imu_cb_group;
+  rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr gps_pose_sub;
+  rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr gps_orientation_sub;
+  rclcpp::CallbackGroup::SharedPtr lidar_cb_group, imu_cb_group, gps_pose_cb_group, gps_orientation_cb_group;
 
   // Publishers
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub;
@@ -136,11 +141,14 @@ private:
   std::atomic<bool> dlio_initialized;
   std::atomic<bool> first_valid_scan;
   std::atomic<bool> first_imu_received;
+  std::atomic<bool> first_gps_pose_recieved;
+  std::atomic<bool> first_gps_orientation_recieved;
   std::atomic<bool> imu_calibrated;
   std::atomic<bool> submap_hasChanged;
   std::atomic<bool> gicp_hasConverged;
   std::atomic<bool> deskew_status;
   std::atomic<int> deskew_size;
+  std::atomic<bool> gps_available;
 
   // Threads
   std::thread publish_thread;
@@ -205,6 +213,7 @@ private:
   rclcpp::Time scan_header_stamp;
   double scan_stamp;
   double prev_scan_stamp;
+  double prev_gps_pose_stamp;
   double scan_dt;
   std::vector<double> comp_times;
   std::vector<double> imu_rates;
@@ -218,7 +227,7 @@ private:
   nano_gicp::NanoGICP<PointType, PointType> gicp_temp;
 
   // Transformations
-  Eigen::Matrix4f T, T_prior, T_corr;
+  Eigen::Matrix4f T, T_prior, T_corr, T_gps;
   Eigen::Quaternionf q_final;
 
   Eigen::Vector3f origin;
@@ -295,6 +304,7 @@ private:
   };
   Pose lidarPose;
   Pose imuPose;
+  Pose gpsPose;
 
   // Metrics
   struct Metrics {

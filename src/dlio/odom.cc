@@ -26,8 +26,12 @@ dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
   this->dlio_initialized = false;
   this->first_valid_scan = false;
   this->first_imu_received = false;
+  this->first_gps_orientation_recieved = false;
+  this->first_gps_pose_recieved = false;
+
   if (this->imu_calibrate_) {this->imu_calibrated = false;}
   else {this->imu_calibrated = true;}
+  // this->imu_calibrated = true;
   this->deskew_status = false;
   this->deskew_size = 0;
 
@@ -47,6 +51,18 @@ dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
   this->imu_sub = this->create_subscription<sensor_msgs::msg::Imu>("imu", rclcpp::SensorDataQoS(),
       std::bind(&dlio::OdomNode::callbackImu, this, std::placeholders::_1), imu_sub_opt);
 
+  this->gps_pose_cb_group = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  auto gps_pose_sub_opt = rclcpp::SubscriptionOptions();
+  gps_pose_sub_opt.callback_group = this->gps_pose_cb_group;
+  this->gps_pose_sub = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("gps_pose", rclcpp::SensorDataQoS(),
+      std::bind(&dlio::OdomNode::callbackGpsPose, this, std::placeholders::_1), gps_pose_sub_opt);
+
+  this->gps_orientation_cb_group = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  auto gps_orientation_sub_opt = rclcpp::SubscriptionOptions();
+  gps_orientation_sub_opt.callback_group = this->gps_orientation_cb_group;
+  this->gps_orientation_sub = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("gps_orientation", rclcpp::SensorDataQoS(),
+      std::bind(&dlio::OdomNode::callbackGpsOrientation, this, std::placeholders::_1), gps_orientation_sub_opt);
+
   this->odom_pub     = this->create_publisher<nav_msgs::msg::Odometry>("odom", 1);
   this->pose_pub     = this->create_publisher<geometry_msgs::msg::PoseStamped>("pose", 1);
   this->path_pub     = this->create_publisher<nav_msgs::msg::Path>("path", 1);
@@ -59,9 +75,11 @@ dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
   this->publish_timer = this->create_wall_timer(std::chrono::duration<double>(0.01), 
       std::bind(&dlio::OdomNode::publishPose, this));
 
+  // start init
   this->T = Eigen::Matrix4f::Identity();
   this->T_prior = Eigen::Matrix4f::Identity();
   this->T_corr = Eigen::Matrix4f::Identity();
+  this->T_gps = Eigen::Matrix4f::Identity();
 
   this->origin = Eigen::Vector3f(0., 0., 0.);
   this->state.p = Eigen::Vector3f(0., 0., 0.);
@@ -73,6 +91,9 @@ dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
 
   this->lidarPose.p = Eigen::Vector3f(0., 0., 0.);
   this->lidarPose.q = Eigen::Quaternionf(1., 0., 0., 0.);
+
+  this->gpsPose.p = Eigen::Vector3f(0., 0., 0.);
+  this->gpsPose.q = Eigen::Quaternionf(1., 0., 0., 0.);
 
   this->imu_meas.stamp = 0.;
   this->imu_meas.ang_vel[0] = 0.;
@@ -90,6 +111,8 @@ dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
   this->deskewed_scan = std::make_shared<const pcl::PointCloud<PointType>>();
   this->current_scan = std::make_shared<const pcl::PointCloud<PointType>>();
   this->submap_cloud = std::make_shared<const pcl::PointCloud<PointType>>();
+
+  this->gps_available = true;
 
   this->num_processed_keyframes = 0;
 
@@ -286,6 +309,7 @@ void dlio::OdomNode::getParams() {
     this->state.b.gyro = Eigen::Vector3f(0., 0., 0.);
     this->imu_accel_sm_ = Eigen::Matrix3f::Identity();
   }
+  this->state.b.accel[2] = -this->gravity_;
 
   // GICP
   dlio::declare_param(this, "odom/gicp/minNumPoints", this->gicp_min_num_points_, 100);
@@ -363,7 +387,7 @@ void dlio::OdomNode::publishPose() {
 
 void dlio::OdomNode::publishToROS(pcl::PointCloud<PointType>::ConstPtr published_cloud, Eigen::Matrix4f T_cloud) {
   this->publishCloud(published_cloud, T_cloud);
-
+  // std::cout << "publishing cloud " << published_cloud.points.size() << std::endl;
   // nav_msgs::msg::Path
   this->path_ros.header.stamp = this->imu_stamp;
   this->path_ros.header.frame_id = this->odom_frame;
@@ -553,7 +577,10 @@ void dlio::OdomNode::preprocessPoints() {
       }
 
       this->first_valid_scan = true;
-      this->T_prior = this->T; // assume no motion for the first scan
+      if (this->gps_available)
+        this->T_prior = this->T_gps;
+      else
+        this->T_prior = this->T; // assume no motion for the first scan
 
     } else {
 
@@ -569,6 +596,10 @@ void dlio::OdomNode::preprocessPoints() {
     }
 
     }
+    // if (this->gps_available) {
+    //   this->T_prior = this->T_gps;
+    // }
+
 
     pcl::PointCloud<PointType>::Ptr deskewed_scan_ = std::make_shared<pcl::PointCloud<PointType>>();
     pcl::transformPointCloud (*this->original_scan, *deskewed_scan_,
@@ -727,10 +758,12 @@ void dlio::OdomNode::setInputSource() {
 
 void dlio::OdomNode::initializeDLIO() {
 
-  // Wait for IMU
-  if (!this->first_imu_received || !this->imu_calibrated) {
+  // Wait for IMU and GPS
+  if (!this->first_imu_received || !this->imu_calibrated 
+      || !this->first_gps_orientation_recieved || !this->first_gps_pose_recieved) {
     return;
   }
+  // this->T_corr = this->T_gps;
 
   this->dlio_initialized = true;
   std::cout << std::endl << " DLIO initialized!" << std::endl;
@@ -839,6 +872,40 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::Sha
 
 }
 
+void dlio::OdomNode::callbackGpsPose(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr gps) {
+  
+  this->gpsPose.p[0] = gps->pose.pose.position.x;
+  this->gpsPose.p[1] = gps->pose.pose.position.y;
+  this->gpsPose.p[2] = gps->pose.pose.position.z;
+
+  if (!this->first_gps_pose_recieved) {
+    this->first_gps_pose_recieved = true;
+    this->lidarPose.p = this->gpsPose.p;
+    this->state.p = this->gpsPose.p;
+  }
+  this->prev_gps_pose_stamp = rclcpp::Time(gps->header.stamp).seconds();
+  std::cout << "recieved gps pose at " << this->prev_gps_pose_stamp << std::endl;
+  this->T_gps(0,3) = this->gpsPose.p[0];
+  this->T_gps(1,3) = this->gpsPose.p[1];
+  this->T_gps(2,3) = this->gpsPose.p[2];
+}
+
+void dlio::OdomNode::callbackGpsOrientation(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr gps) {
+  
+  this->gpsPose.q.w() = gps->pose.pose.orientation.w;
+  this->gpsPose.q.x() = gps->pose.pose.orientation.x;
+  this->gpsPose.q.y() = gps->pose.pose.orientation.y;
+  this->gpsPose.q.z() = gps->pose.pose.orientation.z;
+
+  if (!this->first_gps_orientation_recieved) {
+    this->first_gps_orientation_recieved = true;
+    this->lidarPose.q = this->gpsPose.q;
+    this->state.q = this->gpsPose.q;
+  }
+  this->T_gps.block(0,0,3,3) = this->gpsPose.q.toRotationMatrix();
+
+}
+
 void dlio::OdomNode::callbackImu(const sensor_msgs::msg::Imu::SharedPtr imu_raw) {
 
   this->first_imu_received = true;
@@ -865,7 +932,27 @@ void dlio::OdomNode::callbackImu(const sensor_msgs::msg::Imu::SharedPtr imu_raw)
 
   // IMU calibration procedure - do for three seconds
   if (!this->imu_calibrated) {
+      Eigen::Vector3f grav_vec (0., 0., this->gravity_);
 
+      if (this->calibrate_accel_) {
+
+        // subtract gravity from avg accel to get bias
+        this->state.b.accel =  -grav_vec;
+
+        std::cout << " Accel biases [xyz]: " << to_string_with_precision(this->state.b.accel[0], 8) << ", "
+                                             << to_string_with_precision(this->state.b.accel[1], 8) << ", "
+                                             << to_string_with_precision(this->state.b.accel[2], 8) << std::endl;
+      }
+
+      if (this->calibrate_gyro_) {
+
+        std::cout << " Gyro biases  [xyz]: " << to_string_with_precision(this->state.b.gyro[0], 8) << ", "
+                                             << to_string_with_precision(this->state.b.gyro[1], 8) << ", "
+                                             << to_string_with_precision(this->state.b.gyro[2], 8) << std::endl;
+      }
+
+      this->imu_calibrated = true;
+    /*
     static int num_samples = 0;
     static Eigen::Vector3f gyro_avg (0., 0., 0.);
     static Eigen::Vector3f accel_avg (0., 0., 0.);
@@ -949,7 +1036,8 @@ void dlio::OdomNode::callbackImu(const sensor_msgs::msg::Imu::SharedPtr imu_raw)
 
       this->imu_calibrated = true;
 
-    }
+    } */
+    
 
   } else {
 
@@ -1232,13 +1320,20 @@ dlio::OdomNode::integrateImuInternal(Eigen::Quaternionf q_init, Eigen::Vector3f 
 }
 
 void dlio::OdomNode::propagateGICP() {
+  double time_delta = abs(prev_gps_pose_stamp - this->now().seconds());
 
-  this->lidarPose.p << this->T(0,3), this->T(1,3), this->T(2,3);
+  this->gps_available = time_delta < 0.07;
+  std::cout << "in propogate gicp: delay " << time_delta << " prev stamp " << prev_gps_pose_stamp << " " << this->gps_available << std::endl;
+  Eigen::Matrix4f t =  this->gps_available ? this->T_gps : this->T;
+  std::cout << "Gps mat " << this->T_gps << std::endl;
+  std::cout << "T mat " << this->T << std::endl;
+  this->T_corr = t * this->T_prior.inverse();
+  this->lidarPose.p << t(0,3), t(1,3), t(2,3);
 
   Eigen::Matrix3f rotSO3;
-  rotSO3 << this->T(0,0), this->T(0,1), this->T(0,2),
-            this->T(1,0), this->T(1,1), this->T(1,2),
-            this->T(2,0), this->T(2,1), this->T(2,2);
+  rotSO3 << t(0,0), t(0,1), t(0,2),
+            t(1,0), t(1,1), t(1,2),
+            t(2,0), t(2,1), t(2,2);
 
   Eigen::Quaternionf q(rotSO3);
 
@@ -1331,20 +1426,31 @@ void dlio::OdomNode::updateState() {
   this->state.b.gyro = this->state.b.gyro.array().min(gbias_max).max(-gbias_max);
 
   // Update state
-  this->state.p += dt * this->geo_Kp_ * err;
+  //bypass with gps
+  if (this->gps_available) {
+    std::cout << " using gps to update state" << std::endl;
+    this->state.p = this->lidarPose.p;
+    this->state.q = this->lidarPose.q;
+  }
+  else {
+    std::cout << " gps unavailable to update state" << std::endl;
+    this->state.p += dt * this->geo_Kp_ * err;
+    this->state.q.w() += dt * this->geo_Kq_ * qcorr.w();
+    this->state.q.x() += dt * this->geo_Kq_ * qcorr.x();
+    this->state.q.y() += dt * this->geo_Kq_ * qcorr.y();
+    this->state.q.z() += dt * this->geo_Kq_ * qcorr.z();
+    this->state.q.normalize();
+  }
   this->state.v.lin.w += dt * this->geo_Kv_ * err;
-
-  this->state.q.w() += dt * this->geo_Kq_ * qcorr.w();
-  this->state.q.x() += dt * this->geo_Kq_ * qcorr.x();
-  this->state.q.y() += dt * this->geo_Kq_ * qcorr.y();
-  this->state.q.z() += dt * this->geo_Kq_ * qcorr.z();
-  this->state.q.normalize();
 
   // store previous pose, orientation, and velocity
   this->geo.prev_p = this->state.p;
   this->geo.prev_q = this->state.q;
   this->geo.prev_vel = this->state.v.lin.w;
-
+  std::cout << "state pos: " << this->state.p << std::endl;
+  std::cout << "state orient: " << this->state.q << std::endl;
+  std::cout << "lidar pos: " << this->lidarPose.p << std::endl;
+  std::cout << "lidar orient: " << this->lidarPose.q << std::endl;
 }
 
 sensor_msgs::msg::Imu::SharedPtr dlio::OdomNode::transformImu(const sensor_msgs::msg::Imu::SharedPtr& imu_raw) {
@@ -1892,27 +1998,27 @@ void dlio::OdomNode::debug() {
       << "|" << std::endl;
   }
 
-  if (this->sensor == dlio::SensorType::OUSTER) {
-    std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
-      << "Sensor Rates: Ouster @ " + to_string_with_precision(avg_lidar_rate, 2)
-                                   + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
-      << "|" << std::endl;
-  } else if (this->sensor == dlio::SensorType::VELODYNE) {
-    std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
-      << "Sensor Rates: Velodyne @ " + to_string_with_precision(avg_lidar_rate, 2)
-                                     + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
-      << "|" << std::endl;
-  } else if (this->sensor == dlio::SensorType::HESAI) {
-    std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
-      << "Sensor Rates: Hesai @ " + to_string_with_precision(avg_lidar_rate, 2)
-                                  + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
-      << "|" << std::endl;
-  } else {
-    std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
-      << "Sensor Rates: Unknown LiDAR @ " + to_string_with_precision(avg_lidar_rate, 2)
-                                          + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
-      << "|" << std::endl;
-  }
+  // if (this->sensor == dlio::SensorType::OUSTER) {
+  //   std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
+  //     << "Sensor Rates: Ouster @ " + to_string_with_precision(avg_lidar_rate, 2)
+  //                                  + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
+  //     << "|" << std::endl;
+  // } else if (this->sensor == dlio::SensorType::VELODYNE) {
+  //   std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
+  //     << "Sensor Rates: Velodyne @ " + to_string_with_precision(avg_lidar_rate, 2)
+  //                                    + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
+  //     << "|" << std::endl;
+  // } else if (this->sensor == dlio::SensorType::HESAI) {
+  //   std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
+  //     << "Sensor Rates: Hesai @ " + to_string_with_precision(avg_lidar_rate, 2)
+  //                                 + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
+  //     << "|" << std::endl;
+  // } else {
+  //   std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
+  //     << "Sensor Rates: Unknown LiDAR @ " + to_string_with_precision(avg_lidar_rate, 2)
+  //                                         + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
+  //     << "|" << std::endl;
+  // }
 
   std::cout << "|===================================================================|" << std::endl;
 

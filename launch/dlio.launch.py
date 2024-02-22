@@ -20,8 +20,11 @@ def generate_launch_description():
 
     # Set default arguments
     rviz = LaunchConfiguration('rviz', default='false')
-    pointcloud_topic = LaunchConfiguration('pointcloud_topic', default='/luminar_front_points')
+    pointcloud_topic = LaunchConfiguration('pointcloud_topic', default='/luminar_merged')
     imu_topic = LaunchConfiguration('imu_topic', default='/gps_bot/imu')
+    gps_pose_topic = LaunchConfiguration('gps_pose_topic', default='/gps_bot/pose')
+    gps_orientation_topic = LaunchConfiguration('gps_orientation_topic', default='/gps_bot/orientation')
+    output_pose_topic = LaunchConfiguration('output_pose_topic', default='/dlio/odom_node/pose')
 
     # Define arguments
     declare_rviz_arg = DeclareLaunchArgument(
@@ -39,7 +42,21 @@ def generate_launch_description():
         default_value=imu_topic,
         description='IMU topic name'
     )
-
+    declare_gps_pose_topic_arg = DeclareLaunchArgument(
+        'gps_pose_topic',
+        default_value=gps_pose_topic,
+        description='GPS pose topic name'
+    )
+    declare_gps_orientation_topic_arg = DeclareLaunchArgument(
+        'gps_orientation_topic',
+        default_value=gps_orientation_topic,
+        description='GPS orientation topic name'
+    )
+    declare_output_pose_topic_arg = DeclareLaunchArgument(
+        'output_pose',
+        default_value=output_pose_topic,
+        description='Output pose topic name'
+    )
     # Load parameters
     dlio_yaml_path = PathJoinSubstitution([current_pkg, 'cfg', 'dlio.yaml'])
     dlio_params_yaml_path = PathJoinSubstitution([current_pkg, 'cfg', 'params.yaml'])
@@ -53,8 +70,10 @@ def generate_launch_description():
         remappings=[
             ('pointcloud', pointcloud_topic),
             ('imu', imu_topic),
+            ('gps_pose', gps_pose_topic),
+            ('gps_orientation', gps_orientation_topic),            
             ('odom', 'dlio/odom_node/odom'),
-            ('pose', 'dlio/odom_node/pose'), #dlio/odom_node/pose filtered_publisher/pose
+            ('pose', output_pose_topic),
             ('path', 'dlio/odom_node/path'),
             ('kf_pose', 'dlio/odom_node/keyframes'),
             ('kf_cloud', 'dlio/odom_node/pointcloud/keyframe'),
@@ -74,21 +93,31 @@ def generate_launch_description():
     )
 
     # RViz node
-    rviz_config_path = PathJoinSubstitution([current_pkg, 'launch', 'dlio.rviz'])
-    rviz_node = Node(
-        package='rviz2',
-        executable='rviz2',
-        name='dlio_rviz',
-        arguments=['-d', rviz_config_path],
-        output='screen',
-        condition=IfCondition(LaunchConfiguration('rviz'))
-    )
+    # rviz_config_path = PathJoinSubstitution([current_pkg, 'launch', 'dlio.rviz'])
+    # rviz_node = Node(
+    #     package='rviz2',
+    #     executable='rviz2',
+    #     name='dlio_rviz',
+    #     arguments=['-d', rviz_config_path],
+    #     output='screen',
+    #     condition=IfCondition(LaunchConfiguration('rviz'))
+    # )
 
     return LaunchDescription([
         declare_rviz_arg,
         declare_pointcloud_topic_arg,
         declare_imu_topic_arg,
+        declare_gps_pose_topic_arg,
+        declare_gps_orientation_topic_arg,
+        declare_output_pose_topic_arg,
         dlio_odom_node,
         dlio_map_node,
-        rviz_node
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            arguments='0.0 0.0 0.0 0.0 0.0 0.0 map odom'.split(' '),
+            #parameters=[parameter_file],
+            output='screen'
+            )
+        # rviz_node
     ])
