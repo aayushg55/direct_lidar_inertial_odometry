@@ -16,7 +16,6 @@
 #include <queue>
 
 #include "rclcpp/qos.hpp"
-
 dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
 
   this->getParams();
@@ -63,6 +62,12 @@ dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
   this->gps_orientation_sub = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("gps_orientation", rclcpp::SensorDataQoS(),
       std::bind(&dlio::OdomNode::callbackGpsOrientation, this, std::placeholders::_1), gps_orientation_sub_opt);
 
+  this->gps_denied_cb_group = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  auto gps_denied_sub_opt = rclcpp::SubscriptionOptions();
+  gps_denied_sub_opt.callback_group = this->gps_denied_cb_group;
+  this->gps_denied_sub = this->create_subscription<std_msgs::msg::Bool>("gps_denied", rclcpp::SensorDataQoS(),
+      std::bind(&dlio::OdomNode::callbackGpsDenied, this, std::placeholders::_1), gps_denied_sub_opt);
+
   this->odom_pub     = this->create_publisher<nav_msgs::msg::Odometry>("odom", 1);
   this->pose_pub     = this->create_publisher<geometry_msgs::msg::PoseStamped>("pose", 1);
   this->path_pub     = this->create_publisher<nav_msgs::msg::Path>("path", 1);
@@ -92,8 +97,14 @@ dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
   this->lidarPose.p = Eigen::Vector3f(0., 0., 0.);
   this->lidarPose.q = Eigen::Quaternionf(1., 0., 0., 0.);
 
-  this->gpsPose.p = Eigen::Vector3f(0., 0., 0.);
-  this->gpsPose.q = Eigen::Quaternionf(1., 0., 0., 0.);
+  this->gps_position.p = Eigen::Vector3f(0., 0., 0.);
+  this->gps_position.stamp = 0;
+
+  this->gps_orientation.q = Eigen::Quaternionf(1., 0., 0., 0.);
+  this->gps_orientation.stamp = 0;
+
+  this->gps_position_prev.p = Eigen::Vector3f(0., 0., 0.);
+  this->gps_position_prev.stamp = 0;
 
   this->imu_meas.stamp = 0.;
   this->imu_meas.ang_vel[0] = 0.;
@@ -112,7 +123,9 @@ dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
   this->current_scan = std::make_shared<const pcl::PointCloud<PointType>>();
   this->submap_cloud = std::make_shared<const pcl::PointCloud<PointType>>();
 
-  this->gps_available = true;
+  this->gps_available = false;
+  this->gps_denied = true;
+  this->gps_switched_on = 0;
 
   this->num_processed_keyframes = 0;
 
@@ -309,7 +322,6 @@ void dlio::OdomNode::getParams() {
     this->state.b.gyro = Eigen::Vector3f(0., 0., 0.);
     this->imu_accel_sm_ = Eigen::Matrix3f::Identity();
   }
-  this->state.b.accel[2] = -this->gravity_;
 
   // GICP
   dlio::declare_param(this, "odom/gicp/minNumPoints", this->gicp_min_num_points_, 100);
@@ -577,7 +589,7 @@ void dlio::OdomNode::preprocessPoints() {
       }
 
       this->first_valid_scan = true;
-      if (this->gps_available)
+      if (!this->gps_denied)
         this->T_prior = this->T_gps;
       else
         this->T_prior = this->T; // assume no motion for the first scan
@@ -873,44 +885,60 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::Sha
 }
 
 void dlio::OdomNode::callbackGpsPose(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr gps) {
-  
-  this->gpsPose.p[0] = gps->pose.pose.position.x;
-  this->gpsPose.p[1] = gps->pose.pose.position.y;
-  this->gpsPose.p[2] = gps->pose.pose.position.z;
+  this->gps_position_prev.p = this->gps_position.p;
+  this->gps_position_prev.stamp = this->gps_position.stamp;
+
+  this->gps_position.stamp = rclcpp::Time(gps->header.stamp).seconds();
+  this->gps_position.p[0] = gps->pose.pose.position.x;
+  this->gps_position.p[1] = gps->pose.pose.position.y;
+  this->gps_position.p[2] = gps->pose.pose.position.z;
 
   if (!this->first_gps_pose_recieved) {
     this->first_gps_pose_recieved = true;
-    this->lidarPose.p = this->gpsPose.p;
-    this->state.p = this->gpsPose.p;
+    this->lidarPose.p = this->gps_position.p;
+    this->state.p = this->gps_position.p;
   }
-  this->prev_gps_pose_stamp = rclcpp::Time(gps->header.stamp).seconds();
-  std::cout << "recieved gps pose at " << this->prev_gps_pose_stamp << std::endl;
-  this->T_gps(0,3) = this->gpsPose.p[0];
-  this->T_gps(1,3) = this->gpsPose.p[1];
-  this->T_gps(2,3) = this->gpsPose.p[2];
+
+  std::cout << "recieved gps pose at " << this->gps_position.stamp << std::endl;
+  this->T_gps(0,3) = this->gps_position.p[0];
+  this->T_gps(1,3) = this->gps_position.p[1];
+  this->T_gps(2,3) = this->gps_position.p[2];
+}
+
+void dlio::OdomNode::callbackGpsDenied(const std_msgs::msg::Bool::SharedPtr gps_denied) {
+  // If switch from denied to available zone
+  if ((this->gps_denied && !gps_denied->data) || this->gps_switched_on == 1) {
+    this->gps_switched_on += 1;
+    std::cout << "recieved gps signal: switched!!" << std::endl;
+  }
+  this->gps_denied = gps_denied->data;
 }
 
 void dlio::OdomNode::callbackGpsOrientation(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr gps) {
-  
-  this->gpsPose.q.w() = gps->pose.pose.orientation.w;
-  this->gpsPose.q.x() = gps->pose.pose.orientation.x;
-  this->gpsPose.q.y() = gps->pose.pose.orientation.y;
-  this->gpsPose.q.z() = gps->pose.pose.orientation.z;
+  this->gps_orientation.stamp = rclcpp::Time(gps->header.stamp).seconds();
+  this->gps_orientation.q.w() = gps->pose.pose.orientation.w;
+  this->gps_orientation.q.x() = gps->pose.pose.orientation.x;
+  this->gps_orientation.q.y() = gps->pose.pose.orientation.y;
+  this->gps_orientation.q.z() = gps->pose.pose.orientation.z;
 
   if (!this->first_gps_orientation_recieved) {
     this->first_gps_orientation_recieved = true;
-    this->lidarPose.q = this->gpsPose.q;
-    this->state.q = this->gpsPose.q;
+    this->lidarPose.q = this->gps_orientation.q;
+    this->state.q = this->gps_orientation.q;
   }
-  this->T_gps.block(0,0,3,3) = this->gpsPose.q.toRotationMatrix();
+  std::cout << "recieved gps orientation at " << this->gps_orientation.stamp << std::endl;
 
+  this->T_gps.block(0,0,3,3) = this->gps_orientation.q.toRotationMatrix();
 }
 
 void dlio::OdomNode::callbackImu(const sensor_msgs::msg::Imu::SharedPtr imu_raw) {
 
   this->first_imu_received = true;
+  printf("raw imu is %f %f %f \n", imu_raw->linear_acceleration.x, imu_raw->linear_acceleration.y, imu_raw->linear_acceleration.z);
 
   sensor_msgs::msg::Imu::SharedPtr imu = this->transformImu( imu_raw );
+  printf("raw imu after init transform is %f %f %f \n", imu->linear_acceleration.x, imu->linear_acceleration.y, imu->linear_acceleration.z);
+
   this->imu_stamp = imu->header.stamp;
   double imu_stamp_secs = rclcpp::Time(imu->header.stamp).seconds();
 
@@ -932,12 +960,12 @@ void dlio::OdomNode::callbackImu(const sensor_msgs::msg::Imu::SharedPtr imu_raw)
 
   // IMU calibration procedure - do for three seconds
   if (!this->imu_calibrated) {
-      Eigen::Vector3f grav_vec (0., 0., this->gravity_);
+      // Eigen::Vector3f grav_vec (0., 0., this->gravity_);
 
       if (this->calibrate_accel_) {
 
         // subtract gravity from avg accel to get bias
-        this->state.b.accel =  -grav_vec;
+        // this->state.b.accel =  -grav_vec;
 
         std::cout << " Accel biases [xyz]: " << to_string_with_precision(this->state.b.accel[0], 8) << ", "
                                              << to_string_with_precision(this->state.b.accel[1], 8) << ", "
@@ -1053,7 +1081,16 @@ void dlio::OdomNode::callbackImu(const sensor_msgs::msg::Imu::SharedPtr imu_raw)
     Eigen::Vector3f lin_accel_corrected = (this->imu_accel_sm_ * lin_accel) - this->state.b.accel;
     Eigen::Vector3f ang_vel_corrected = ang_vel - this->state.b.gyro;
 
+    // average out z accel
     this->imu_meas.lin_accel = lin_accel_corrected;
+    // float accel_z_avg = this->imu_meas.lin_accel[2];
+    // const int n_avg = 3;
+    // if (this->imu_buffer.size() >= n_avg-1) {
+    //   for (int i = 0; i < n_avg-1; i ++)
+    //     accel_z_avg += this->imu_buffer[i].lin_accel[2];
+    // }
+    // this->imu_meas.lin_accel[2] = accel_z_avg / n_avg;
+
     this->imu_meas.ang_vel = ang_vel_corrected;
 
     // Store calibrated IMU measurements into imu buffer for manual integration later.
@@ -1320,11 +1357,17 @@ dlio::OdomNode::integrateImuInternal(Eigen::Quaternionf q_init, Eigen::Vector3f 
 }
 
 void dlio::OdomNode::propagateGICP() {
-  double time_delta = abs(prev_gps_pose_stamp - this->now().seconds());
+  double time_delta = abs(gps_position.stamp - this->now().seconds());
+  //TODO: use interpolated position and orientation
+  // omega.w() = 0;
+  // omega.vec() = this->imu_meas.ang_vel;
+  // Eigen::Quaternionf tmp = qhat * omega;
+  // this->state.q.w() += 0.5 * dt * tmp.w();
+  // this->state.q.vec() += 0.5 * dt * tmp.vec();
 
   this->gps_available = time_delta < 0.07;
-  std::cout << "in propogate gicp: delay " << time_delta << " prev stamp " << prev_gps_pose_stamp << " " << this->gps_available << std::endl;
-  Eigen::Matrix4f t =  this->gps_available ? this->T_gps : this->T;
+  std::cout << "in propogate gicp: delay " << time_delta << " prev stamp " << gps_position.stamp << " " << this->gps_available << std::endl;
+  Eigen::Matrix4f t =  !this->gps_denied ? this->T_gps : this->T;
   std::cout << "Gps mat " << this->T_gps << std::endl;
   std::cout << "T mat " << this->T << std::endl;
   this->T_corr = t * this->T_prior.inverse();
@@ -1356,15 +1399,17 @@ void dlio::OdomNode::propagateState() {
 
   // Transform accel from body to world frame
   world_accel = qhat._transformVector(this->imu_meas.lin_accel);
+  std::cout << "body accel after bias correc.: " << imu_meas.lin_accel[0] << " " << imu_meas.lin_accel[1] << " " << imu_meas.lin_accel[2] << std::endl;
+  std::cout << "world accel: " << world_accel[0] << " " << world_accel[1] << " " << world_accel[2] << std::endl;
 
   // Accel propogation
   this->state.p[0] += this->state.v.lin.w[0]*dt + 0.5*dt*dt*world_accel[0];
   this->state.p[1] += this->state.v.lin.w[1]*dt + 0.5*dt*dt*world_accel[1];
-  this->state.p[2] += this->state.v.lin.w[2]*dt + 0.5*dt*dt*(world_accel[2] - this->gravity_);
+  this->state.p[2] += this->state.v.lin.w[2]*dt + 0.5*dt*dt*(world_accel[2] - this->gravity_); // -  this->gravity_
 
   this->state.v.lin.w[0] += world_accel[0]*dt;
   this->state.v.lin.w[1] += world_accel[1]*dt;
-  this->state.v.lin.w[2] += (world_accel[2] - this->gravity_)*dt;
+  this->state.v.lin.w[2] += (world_accel[2] - this->gravity_)*dt; // - this->gravity_
   this->state.v.lin.b = this->state.q.toRotationMatrix().inverse() * this->state.v.lin.w;
 
   // Gyro propogation
@@ -1387,8 +1432,10 @@ void dlio::OdomNode::updateState() {
   // Lock thread to prevent state from being accessed by PropagateState
   std::lock_guard<std::mutex> lock( this->geo.mtx );
 
-  Eigen::Vector3f pin = this->lidarPose.p;
-  Eigen::Quaternionf qin = this->lidarPose.q;
+  Eigen::Vector3f pin = this->gps_denied ? this->lidarPose.p : gps_position.p;
+  Eigen::Quaternionf qin = this->gps_denied ? this->lidarPose.q : gps_orientation.q;
+  if (this->gps_denied)
+    return;
   double dt = this->scan_stamp - this->prev_scan_stamp;
 
   Eigen::Quaternionf qe, qhat, qcorr;
@@ -1412,36 +1459,66 @@ void dlio::OdomNode::updateState() {
 
   err_body = qhat.conjugate()._transformVector(err);
 
+  // Update state
+  //bypass with gps
+
+  this->state.p += dt * this->geo_Kp_ * err;
+  this->state.q.w() += dt * this->geo_Kq_ * qcorr.w();
+  this->state.q.x() += dt * this->geo_Kq_ * qcorr.x();
+  this->state.q.y() += dt * this->geo_Kq_ * qcorr.y();
+  this->state.q.z() += dt * this->geo_Kq_ * qcorr.z();
+  this->state.q.normalize();
+
+  if (!this->gps_denied) {
+    std::cout << " using gps to update state" << std::endl;
+  //   this->state.p = pin;
+  //   this->state.q = qin;
+  // }
+  else {
+    std::cout << " gps unavailable to update state" << std::endl;
+  //   this->state.p += dt * this->geo_Kp_ * err;
+  //   this->state.q.w() += dt * this->geo_Kq_ * qcorr.w();
+  //   this->state.q.x() += dt * this->geo_Kq_ * qcorr.x();
+  //   this->state.q.y() += dt * this->geo_Kq_ * qcorr.y();
+  //   this->state.q.z() += dt * this->geo_Kq_ * qcorr.z();
+  //   this->state.q.normalize();
+  }
+
+  // Update accel bias
+  // std::cout << "in update state err_body:  before first update to accel b " << this->state.b.accel << std::endl;
   double abias_max = this->geo_abias_max_;
   double gbias_max = this->geo_gbias_max_;
 
-  // Update accel bias
-  this->state.b.accel -= dt * this->geo_Kab_ * err_body;
-  this->state.b.accel = this->state.b.accel.array().min(abias_max).max(-abias_max);
-
   // Update gyro bias
-  this->state.b.gyro[0] -= dt * this->geo_Kgb_ * qe.w() * qe.x();
-  this->state.b.gyro[1] -= dt * this->geo_Kgb_ * qe.w() * qe.y();
-  this->state.b.gyro[2] -= dt * this->geo_Kgb_ * qe.w() * qe.z();
-  this->state.b.gyro = this->state.b.gyro.array().min(gbias_max).max(-gbias_max);
+  if (this->gps_switched_on == 2) {
+    // If gps available, reset biases and velocity from dropout zone
+    std::cout << "in update state on switch, reset biases" << std::endl;
+    this->state.b.gyro = Eigen::Vector3f(0., 0., 0.);
+    this->state.b.accel = Eigen::Vector3f(0., 0., 0.);
 
-  // Update state
-  //bypass with gps
-  if (this->gps_available) {
-    std::cout << " using gps to update state" << std::endl;
-    this->state.p = this->lidarPose.p;
-    this->state.q = this->lidarPose.q;
+    double dt_gps = this->gps_position.stamp - this->gps_position_prev.stamp;
+    printf("prev gps %f, curr gps stamp %f \n", this->gps_position.stamp, this->gps_position_prev.stamp);
+    this->state.v.lin.w = (this->gps_position.p - this->gps_position_prev.p) / 0.05;
+    printf("dt_gps is %f, new world lin v is %f %f %f \n", dt_gps, state.v.lin.w[0], state.v.lin.w[1], state.v.lin.w[2]);
+    printf("prev_gps_pos is %f %f %f \n", gps_position_prev.p[0], gps_position_prev.p[1], gps_position_prev.p[2]);
+    printf("curr_gps_pos is %f %f %f \n", gps_position.p[0], gps_position.p[1], gps_position.p[2]);
+
+    this->state.v.lin.b = this->state.q.toRotationMatrix().inverse() * this->state.v.lin.w;
+    printf("new body lin v is %f %f %f \n", state.v.lin.b[0], state.v.lin.b[1], state.v.lin.b[2]);
+
+    this->gps_switched_on = 0;
+  } else {
+    this->state.b.accel -= dt * this->geo_Kab_ * err_body;
+    this->state.b.accel = this->state.b.accel.array().min(abias_max).max(-abias_max);
+
+    this->state.b.gyro[0] -= dt * this->geo_Kgb_ * qe.w() * qe.x();
+    this->state.b.gyro[1] -= dt * this->geo_Kgb_ * qe.w() * qe.y();
+    this->state.b.gyro[2] -= dt * this->geo_Kgb_ * qe.w() * qe.z();
+    this->state.b.gyro = this->state.b.gyro.array().min(gbias_max).max(-gbias_max);
+
+    this->state.v.lin.w += dt * this->geo_Kv_ * err;
   }
-  else {
-    std::cout << " gps unavailable to update state" << std::endl;
-    this->state.p += dt * this->geo_Kp_ * err;
-    this->state.q.w() += dt * this->geo_Kq_ * qcorr.w();
-    this->state.q.x() += dt * this->geo_Kq_ * qcorr.x();
-    this->state.q.y() += dt * this->geo_Kq_ * qcorr.y();
-    this->state.q.z() += dt * this->geo_Kq_ * qcorr.z();
-    this->state.q.normalize();
-  }
-  this->state.v.lin.w += dt * this->geo_Kv_ * err;
+
 
   // store previous pose, orientation, and velocity
   this->geo.prev_p = this->state.p;
@@ -1454,7 +1531,6 @@ void dlio::OdomNode::updateState() {
 }
 
 sensor_msgs::msg::Imu::SharedPtr dlio::OdomNode::transformImu(const sensor_msgs::msg::Imu::SharedPtr& imu_raw) {
-
   auto imu = std::make_shared<sensor_msgs::msg::Imu>();
 
   // Copy header
@@ -1486,7 +1562,7 @@ sensor_msgs::msg::Imu::SharedPtr dlio::OdomNode::transformImu(const sensor_msgs:
                             imu_raw->linear_acceleration.z);
 
   Eigen::Vector3f lin_accel_cg = this->extrinsics.baselink2imu.R * lin_accel;
-
+  printf("lin_accel_cg pre addition is %f %f %f \n" lin_accel_cg[0], lin_accel_cg[1], lin_accel_cg[2]);
   lin_accel_cg = lin_accel_cg
                  + ((ang_vel_cg - ang_vel_cg_prev) / dt).cross(-this->extrinsics.baselink2imu.t)
                  + ang_vel_cg.cross(ang_vel_cg.cross(-this->extrinsics.baselink2imu.t));
@@ -1690,6 +1766,8 @@ void dlio::OdomNode::updateKeyframes() {
     newKeyframe = true;
   }
 
+  //TODO: change
+  newKeyframe = false;
   if (newKeyframe) {
 
     // update keyframe vector

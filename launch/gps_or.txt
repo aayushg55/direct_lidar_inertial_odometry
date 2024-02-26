@@ -1,0 +1,1 @@
+WARNING: topic [/igps_bot/orientation] does not appear to be published yet

@@ -25,6 +25,7 @@ def generate_launch_description():
     gps_pose_topic = LaunchConfiguration('gps_pose_topic', default='/gps_bot/pose')
     gps_orientation_topic = LaunchConfiguration('gps_orientation_topic', default='/gps_bot/orientation')
     output_pose_topic = LaunchConfiguration('output_pose_topic', default='/dlio/odom_node/pose')
+    gps_denied_topic = LaunchConfiguration('gps_denied_topic', default='/gps_is_denied')
 
     # Define arguments
     declare_rviz_arg = DeclareLaunchArgument(
@@ -57,6 +58,11 @@ def generate_launch_description():
         default_value=output_pose_topic,
         description='Output pose topic name'
     )
+    declare_gps_denied_topic_arg = DeclareLaunchArgument(
+        'gps_denied_topic',
+        default_value=gps_denied_topic,
+        description='GPS denied topic name'
+    )
     # Load parameters
     dlio_yaml_path = PathJoinSubstitution([current_pkg, 'cfg', 'dlio.yaml'])
     dlio_params_yaml_path = PathJoinSubstitution([current_pkg, 'cfg', 'params.yaml'])
@@ -74,6 +80,7 @@ def generate_launch_description():
             ('gps_orientation', gps_orientation_topic),            
             ('odom', 'dlio/odom_node/odom'),
             ('pose', output_pose_topic),
+            ('gps_denied', gps_denied_topic),
             ('path', 'dlio/odom_node/path'),
             ('kf_pose', 'dlio/odom_node/keyframes'),
             ('kf_cloud', 'dlio/odom_node/pointcloud/keyframe'),
@@ -110,14 +117,15 @@ def generate_launch_description():
         declare_gps_pose_topic_arg,
         declare_gps_orientation_topic_arg,
         declare_output_pose_topic_arg,
+        declare_gps_denied_topic_arg,
         dlio_odom_node,
-        dlio_map_node,
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            arguments='0.0 0.0 0.0 0.0 0.0 0.0 map odom'.split(' '),
-            #parameters=[parameter_file],
-            output='screen'
-            )
+        dlio_map_node
+        # Node(
+        #     package='tf2_ros',
+        #     executable='static_transform_publisher',
+        #     arguments='0.0 0.0 0.0 0.0 0.0 0.0 map odom'.split(' '),
+        #     #parameters=[parameter_file],
+        #     output='screen'
+        # )
         # rviz_node
     ])

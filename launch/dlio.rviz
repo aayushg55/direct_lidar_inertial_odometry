@@ -6,8 +6,10 @@ Panels:
       Expanded:
         - /Frames1
         - /Point Clouds1
+        - /Point Clouds1/Deskewed Scan1
         - /Odometry1
         - /Odometry1/Pose1
+        - /Odometry1/Keyframes1
         - /Odometry1/Trajectory1
         - /PoseWithCovariance1
       Splitter Ratio: 0.6470588445663452
@@ -345,7 +347,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 55.51488494873047
+      Distance: 70.2735824584961
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -360,10 +362,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.2899995744228363
+      Pitch: 0.1499994695186615
       Target Frame: base_link
       Value: Orbit (rviz_default_plugins)
-      Yaw: 4.288641452789307
+      Yaw: 1.0572726726531982
     Saved: ~
 Window Geometry:
   Displays:
@@ -381,5 +383,5 @@ Window Geometry:
   Views:
     collapsed: true
   Width: 1362
-  X: 123
-  Y: 108
+  X: 113
+  Y: 130

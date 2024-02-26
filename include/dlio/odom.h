@@ -18,6 +18,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/pose_array.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -59,6 +60,7 @@ private:
   void callbackImu(const sensor_msgs::msg::Imu::SharedPtr imu);
   void callbackGpsPose(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr gps);
   void callbackGpsOrientation(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr gps);
+  void callbackGpsDenied(const std_msgs::msg::Bool::SharedPtr gps_denied);
 
   void publishPose();
 
@@ -118,7 +120,8 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub;
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr gps_pose_sub;
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr gps_orientation_sub;
-  rclcpp::CallbackGroup::SharedPtr lidar_cb_group, imu_cb_group, gps_pose_cb_group, gps_orientation_cb_group;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr gps_denied_sub;
+  rclcpp::CallbackGroup::SharedPtr lidar_cb_group, imu_cb_group, gps_pose_cb_group, gps_orientation_cb_group, gps_denied_cb_group;
 
   // Publishers
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub;
@@ -149,6 +152,8 @@ private:
   std::atomic<bool> deskew_status;
   std::atomic<int> deskew_size;
   std::atomic<bool> gps_available;
+  std::atomic<bool> gps_denied;
+  int gps_switched_on;
 
   // Threads
   std::thread publish_thread;
@@ -213,7 +218,8 @@ private:
   rclcpp::Time scan_header_stamp;
   double scan_stamp;
   double prev_scan_stamp;
-  double prev_gps_pose_stamp;
+  // double prev_gps_pose_stamp;
+  // double prev_gps_orientation_stamp;
   double scan_dt;
   std::vector<double> comp_times;
   std::vector<double> imu_rates;
@@ -304,7 +310,18 @@ private:
   };
   Pose lidarPose;
   Pose imuPose;
-  Pose gpsPose;
+
+  struct PositionStamped {
+    double stamp;
+    Eigen::Vector3f p;
+  };
+  struct OrientationStamped {
+    double stamp;
+    Eigen::Quaternionf q;
+  };
+  PositionStamped gps_position;
+  PositionStamped gps_position_prev;
+  OrientationStamped gps_orientation;
 
   // Metrics
   struct Metrics {
