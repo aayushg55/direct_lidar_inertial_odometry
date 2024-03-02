@@ -260,6 +260,7 @@ private:
     double dt; // defined as the difference between the current and the previous measurement
     Eigen::Vector3f ang_vel;
     Eigen::Vector3f lin_accel;
+    Eigen::Quaternionf q;
   }; ImuMeas imu_meas;
 
   boost::circular_buffer<ImuMeas> imu_buffer;
@@ -322,6 +323,8 @@ private:
   PositionStamped gps_position;
   PositionStamped gps_position_prev;
   OrientationStamped gps_orientation;
+  OrientationStamped pred_gps_orientation;
+  std::atomic<bool> new_gps_orientation;
 
   // Metrics
   struct Metrics {

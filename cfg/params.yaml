@@ -32,7 +32,7 @@
     odom/imu/bufferSize: 5000
 
     odom/preprocessing/cropBoxFilter/size: 1.0
-    odom/preprocessing/voxelFilter/res: 0.25
+    odom/preprocessing/voxelFilter/res: 0.4
 
     odom/keyframe/threshD: 1.0
     odom/keyframe/threshR: 45.0
@@ -52,6 +52,6 @@
     odom/geo/Kv: 11.25
     odom/geo/Kq: 4.0
     odom/geo/Kab: 2.25
-    odom/geo/Kgb: 1.0
-    odom/geo/abias_max: 3.0
+    odom/geo/Kgb: 2.0
+    odom/geo/abias_max: 5.0
     odom/geo/gbias_max: 0.5
