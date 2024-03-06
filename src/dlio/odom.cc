@@ -607,6 +607,18 @@ void dlio::OdomNode::preprocessPoints() {
       this->T_prior = this->T;
     }
 
+    Eigen::Vector3f p = this->T_prior.block(0, 3, 3, 1);
+
+    auto t = this->T_prior;
+    Eigen::Matrix3f rotSO3;
+    rotSO3 << t(0,0), t(0,1), t(0,2),
+            t(1,0), t(1,1), t(1,2),
+            t(2,0), t(2,1), t(2,2);
+    Eigen::Quaternionf q(rotSO3);
+
+    printf("prior pose in preprocess from imu+lidar: \n");
+    printf("prior pose p: %f %f %f \n", p[0], p[1], p[2]);
+    printf("prior pose q: %f %f %f %f\n", q.x(), q.y(), q.z(), q.w());
     }
     // if (this->gps_available) {
     //   this->T_prior = this->T_gps;
@@ -775,6 +787,9 @@ void dlio::OdomNode::initializeDLIO() {
       || !this->first_gps_orientation_recieved || !this->first_gps_pose_recieved) {
     return;
   }
+  // if (!this->first_imu_received || !this->imu_calibrated) {
+  //   return;
+  // }
   // this->T_corr = this->T_gps;
 
   this->dlio_initialized = true;
@@ -1375,8 +1390,8 @@ void dlio::OdomNode::propagateGICP() {
   // this->state.q.w() += 0.5 * dt * tmp.w();
   // this->state.q.vec() += 0.5 * dt * tmp.vec();
 
-  this->gps_available = time_delta < 0.07;
-  std::cout << "in propogate gicp: delay " << time_delta << " prev stamp " << gps_position.stamp << " " << this->gps_available << std::endl;
+  // this->gps_available = time_delta < 0.07;
+  // std::cout << "in propogate gicp: delay " << time_delta << " prev stamp " << gps_position.stamp << " " << this->gps_available << std::endl;
   Eigen::Matrix4f t =  this->T;
 
   Eigen::Vector3f p;
@@ -1455,7 +1470,8 @@ void dlio::OdomNode::propagateState() {
   this->state.p[2] += this->state.v.lin.w[2]*dt + 0.5*dt*dt*(world_accel[2] - this->gravity_);
 
   this->state.v.lin.w[0] += world_accel[0]*dt;
-  this->state.v.lin.w[1] += world_accel[1]*dt;  this->state.v.lin.w[2] += (world_accel[2] - this->gravity_)*dt; 
+  this->state.v.lin.w[1] += world_accel[1]*dt;
+  this->state.v.lin.w[2] += (world_accel[2] - this->gravity_)*dt; 
   this->state.v.lin.b = this->state.q.toRotationMatrix().inverse() * this->state.v.lin.w;
   printf("new lin v after imu propogate: %f %f %f \n", this->state.v.lin.b[0], this->state.v.lin.b[1], this->state.v.lin.b[2]);
   // Gyro propogation
@@ -1550,6 +1566,10 @@ void dlio::OdomNode::updateState() {
   Eigen::Vector3f err_body;
 
   err_body = qhat.conjugate()._transformVector(err);
+  double e_norm = err.norm();
+  if (e_norm > 5) {
+    printf("large err!: err_norm is %f \n", e_norm);
+  }
   printf("err: %f %f %f \n", err[0], err[1], err[2]);
   printf("err_body: %f %f %f \n", err_body[0], err_body[1], err_body[2]);
 
@@ -1614,6 +1634,7 @@ void dlio::OdomNode::updateState() {
   if (this->new_gps_orientation) {
     this->state.b.gyro = Eigen::Vector3f(0., 0., 0.);
     this->state.q = this->gps_orientation.q;
+    this->state.v.lin.b = this->state.q.toRotationMatrix().inverse() * this->state.v.lin.w;
     this->new_gps_orientation = false;
     printf("replaced state q with gps q\n");
   }
@@ -1871,7 +1892,7 @@ void dlio::OdomNode::updateKeyframes() {
   }
 
   //TODO: change
-  // newKeyframe = false;
+  newKeyframe = false;
   if (newKeyframe) {
 
     // update keyframe vector

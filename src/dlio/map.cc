@@ -42,7 +42,7 @@ dlio::MapNode::~MapNode() {}
 void dlio::MapNode::getParams() {
 
   this->declare_parameter<std::string>("odom/odom_frame", "odom");
-  this->declare_parameter<double>("map/sparse/frequency", 1.0);
+  this->declare_parameter<double>("map/sparse/frequency", 0.25);
   this->declare_parameter<double>("map/sparse/leafSize", 0.5);
 
   this->get_parameter("odom/odom_frame", this->odom_frame);
@@ -61,6 +61,7 @@ void dlio::MapNode::publishTimer() {
     map_ros.header.stamp = this->now();
     map_ros.header.frame_id = this->odom_frame;
     this->map_pub->publish(map_ros);
+    // std::cout << "published sparse map" << std::endl;
   }
 
 }
