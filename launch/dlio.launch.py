@@ -7,7 +7,7 @@
 #   Authors: Kenny J. Chen, Ryan Nemiroff, Brett T. Lopez
 #   Contact: {kennyjchen, ryguyn, btlopez}@ucla.edu
 #
-
+import launch_ros
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition   
@@ -112,6 +112,7 @@ def generate_launch_description():
     # )
 
     return LaunchDescription([
+        launch_ros.actions.SetParameter(name='use_sim_time', value=True),
         declare_rviz_arg,
         declare_pointcloud_topic_arg,
         declare_imu_topic_arg,

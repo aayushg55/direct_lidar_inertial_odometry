@@ -218,6 +218,7 @@ private:
   rclcpp::Time scan_header_stamp;
   double scan_stamp;
   double prev_scan_stamp;
+  double last_gps_recorded_local_time;
   // double prev_gps_pose_stamp;
   // double prev_gps_orientation_stamp;
   double scan_dt;
