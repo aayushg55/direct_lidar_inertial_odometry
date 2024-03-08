@@ -598,9 +598,14 @@ void dlio::OdomNode::preprocessPoints() {
 
       // IMU prior for second scan onwards
     std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> frames;
+    if (!this->gps_denied) {
       frames = this->integrateImu(this->prev_scan_stamp, this->lidarPose.q, this->lidarPose.p,
                                 this->geo.prev_vel.cast<float>(), {this->scan_stamp});
-
+    }
+    else {
+      frames = this->integrateImu(this->prev_scan_stamp, this->state.q, this->state.p,
+                          this->geo.prev_vel.cast<float>(), {this->scan_stamp});
+    }
     if (frames.size() > 0) {
       this->T_prior = frames.back();
     } else {
@@ -1908,7 +1913,11 @@ void dlio::OdomNode::updateKeyframes() {
 
     // update keyframe vector
     std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
-    this->keyframes.push_back(std::make_pair(std::make_pair(this->lidarPose.p, this->lidarPose.q), this->current_scan));
+    if (this->gps_denied)
+      this->keyframes.push_back(std::make_pair(std::make_pair(this->state.p, this->state.q), this->current_scan));
+    else 
+      this->keyframes.push_back(std::make_pair(std::make_pair(this->lidarPose.p, this->lidarPose.q), this->current_scan));
+
     this->keyframe_timestamps.push_back(this->scan_header_stamp);
     this->keyframe_normals.push_back(this->gicp.getSourceCovariances());
     this->keyframe_transformations.push_back(this->T_corr);
