@@ -1438,10 +1438,9 @@ void dlio::OdomNode::propagateGICP() {
 
     // q = gps_orientation.q;
 
-    Eigen::Matrix4f new_t;
-    new_t.block(0,0,3,3) = q.toRotationMatrix();
-    new_t.block(0,3,3,1) = p;
-    this->T_corr = new_t * this->T_prior.inverse();
+    this->T.block(0,0,3,3) = q.toRotationMatrix();
+    this->T.block(0,3,3,1) = p;
+    this->T_corr = this->T * this->T_prior.inverse();
   }
 
   q.normalize();
@@ -1891,8 +1890,6 @@ void dlio::OdomNode::updateKeyframes() {
     newKeyframe = true;
   }
 
-  //TODO: change
-  newKeyframe = false;
   if (newKeyframe) {
 
     // update keyframe vector
