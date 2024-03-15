@@ -34,6 +34,8 @@
 // BOOST SERIALIZATION
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/archive/text_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
+#include <boost/archive/binary_iarchive.hpp>
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/list.hpp>
 #include <boost/serialization/shared_ptr.hpp>
@@ -49,6 +51,8 @@
 #include <pcl/surface/convex_hull.h>
 #include <pcl_conversions/pcl_conversions.h>
 
+#include <filesystem>
+
 class dlio::OdomNode: public rclcpp::Node {
 
 public:
@@ -57,6 +61,7 @@ public:
   ~OdomNode();
 
   void start();
+  void on_shutdown_callback();
 
 private:
 
@@ -122,8 +127,9 @@ private:
 
   void debug();
 
-  bool saveMap();
+  bool saveMap(const std::string& filename);
   bool loadMap();
+  void processLoadedMap();
 
   rclcpp::TimerBase::SharedPtr publish_timer;
 

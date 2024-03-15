@@ -213,6 +213,11 @@ dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
   }
   fclose(file);
 
+  if (this->run_mode_ == 0) {
+    loadMap();
+    processLoadedMap();
+  }
+
 }
 
 dlio::OdomNode::~OdomNode() {}
@@ -262,6 +267,8 @@ void dlio::OdomNode::getParams() {
   // Map serialization
   dlio::declare_param(this, "map_file", this->map_file_, "map.bin");
   dlio::declare_param(this, "run_mode", this->run_mode_, 0);
+  std::cout << "Run mode: " << this->run_mode_ << std::endl;
+  std::cout << "Map file: " << this->map_file_ << std::endl;
 
   // Extrinsics
   std::vector<double> t_default{0., 0., 0.};
@@ -864,7 +871,8 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::Sha
   this->getNextPose();
 
   // Update current keyframe poses and map
-  this->updateKeyframes();
+  if (this->run_mode_ >= 1)
+    this->updateKeyframes();
 
   // Build keyframe normals and submap if needed (and if we're not already waiting)
   if (this->new_submap_is_ready) {
@@ -2079,35 +2087,37 @@ void dlio::OdomNode::buildSubmap(State vehicle_state) {
 
 void dlio::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
 
-  // transform the new keyframe(s) and associated covariance list(s)
-    std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
+  if (this->run_mode_ >= 1) {
+    // transform the new keyframe(s) and associated covariance list(s)
+      std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
 
-  for (int i = this->num_processed_keyframes; i < this->keyframes.size(); i++) {
-    pcl::PointCloud<PointType>::ConstPtr raw_keyframe = this->keyframes[i].second;
-    std::shared_ptr<const nano_gicp::CovarianceList> raw_covariances = this->keyframe_normals[i];
-    Eigen::Matrix4f T = this->keyframe_transformations[i];
-    lock.unlock();
+    for (int i = this->num_processed_keyframes; i < this->keyframes.size(); i++) {
+      pcl::PointCloud<PointType>::ConstPtr raw_keyframe = this->keyframes[i].second;
+      std::shared_ptr<const nano_gicp::CovarianceList> raw_covariances = this->keyframe_normals[i];
+      Eigen::Matrix4f T = this->keyframe_transformations[i];
+      lock.unlock();
 
-    Eigen::Matrix4d Td = T.cast<double>();
+      Eigen::Matrix4d Td = T.cast<double>();
 
-    pcl::PointCloud<PointType>::Ptr transformed_keyframe = std::make_shared<pcl::PointCloud<PointType>>();
-    pcl::transformPointCloud (*raw_keyframe, *transformed_keyframe, T);
+      pcl::PointCloud<PointType>::Ptr transformed_keyframe = std::make_shared<pcl::PointCloud<PointType>>();
+      pcl::transformPointCloud (*raw_keyframe, *transformed_keyframe, T);
 
-    std::shared_ptr<nano_gicp::CovarianceList> transformed_covariances (std::make_shared<nano_gicp::CovarianceList>(raw_covariances->size()));
-    std::transform(raw_covariances->begin(), raw_covariances->end(), transformed_covariances->begin(),
-                   [&Td](Eigen::Matrix4d cov) { return Td * cov * Td.transpose(); });
+      std::shared_ptr<nano_gicp::CovarianceList> transformed_covariances (std::make_shared<nano_gicp::CovarianceList>(raw_covariances->size()));
+      std::transform(raw_covariances->begin(), raw_covariances->end(), transformed_covariances->begin(),
+                    [&Td](Eigen::Matrix4d cov) { return Td * cov * Td.transpose(); });
 
-    ++this->num_processed_keyframes;
+      ++this->num_processed_keyframes;
 
-    lock.lock();
-    this->keyframes[i].second = transformed_keyframe;
-    this->keyframe_normals[i] = transformed_covariances;
+      lock.lock();
+      this->keyframes[i].second = transformed_keyframe;
+      this->keyframe_normals[i] = transformed_covariances;
 
-    this->publish_keyframe_thread = std::thread( &dlio::OdomNode::publishKeyframe, this, this->keyframes[i], this->keyframe_timestamps[i] );
-    this->publish_keyframe_thread.detach();
+      this->publish_keyframe_thread = std::thread( &dlio::OdomNode::publishKeyframe, this, this->keyframes[i], this->keyframe_timestamps[i] );
+      this->publish_keyframe_thread.detach();
   }
 
-  lock.unlock();
+    lock.unlock();
+  }
 
   // Pause to prevent stealing resources from the main loop if it is running.
   this->pauseSubmapBuildIfNeeded();
@@ -2118,6 +2128,25 @@ void dlio::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
 void dlio::OdomNode::pauseSubmapBuildIfNeeded() {
   std::unique_lock<decltype(this->main_loop_running_mutex)> lock(this->main_loop_running_mutex);
   this->submap_build_cv.wait(lock, [this]{ return !this->main_loop_running; });
+}
+
+void dlio::OdomNode::processLoadedMap() {
+
+  // transform the new keyframe(s) and associated covariance list(s)
+  std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
+
+  for (int i = this->num_processed_keyframes; i < this->keyframes.size(); i++) {
+    lock.unlock();
+
+    ++this->num_processed_keyframes;
+
+    lock.lock();
+
+    this->publish_keyframe_thread = std::thread( &dlio::OdomNode::publishKeyframe, this, this->keyframes[i], this->get_clock()->now() );
+    this->publish_keyframe_thread.detach();
+  }
+
+  lock.unlock();
 }
 
 void dlio::OdomNode::debug() {
@@ -2333,55 +2362,112 @@ void serialize(Archive& ar, nano_gicp::CovarianceList& list, const unsigned int 
   ar & boost::serialization::make_nvp("covarianceList", list);
 }
 
-template <class Archive, typename PointType>
-void serialize(Archive& ar, pcl::PointCloud<PointType>::ConstPtr& cloud, const unsigned int /*version*/) {
-  std::stringstream ss;
-  std::string cloud_data;
-
+template <class Archive>
+inline void serialize(Archive& ar, pcl::PointCloud<PointType>::ConstPtr& cloud, const unsigned int version) {
+  std::vector<PointType> data;
   if (Archive::is_saving::value) {
-    pcl::io::savePCDFileBinary(ss, *cloud);
-    cloud_data = ss.str();
+    data.assign(cloud->points.begin(), cloud->points.end());
   }
-
-  ar & cloud_data;
-
+  ar & (data);
   if (Archive::is_loading::value) {
-    std::stringstream ss(cloud_data);
     pcl::PointCloud<PointType> new_cloud;
-    pcl::io::loadPCDFile(ss, new_cloud);
+    new_cloud.points.assign(data.begin(), data.end());
     cloud = new_cloud.makeShared();
   }
-  
 }
-// // Serialize an Eigen::Quaternionf
-// template<class Archive>
-// void serialize(Archive& ar, Eigen::Quaternionf& q, const unsigned int /*version*/) {
-//   ar & q.x() & q.y() & q.z() & q.w();
-// }
 
-// // Serialize an Eigen::Vector3f
-// template<class Archive>
-// void serialize(Archive& ar, Eigen::Vector3f& v, const unsigned int /*version*/) {
-//   ar & v.x() & q.y() & q.z();
-// }
+// template <class Archive>
+// void serialize(Archive& ar, pcl::PointCloud<PointType>::ConstPtr& cloud, const unsigned int /*version*/) {
+//   std::stringstream ss;
+//   std::string cloud_data;
 
+//   if (Archive::is_saving::value) {
+//     pcl::io::savePCDFileBinary(ss, *cloud);
+//     cloud_data = ss.str();
+//   }
+
+//   ar & cloud_data;
+
+//   if (Archive::is_loading::value) {
+//     // std::stringstream ss(cloud_data);
+//     pcl::PointCloud<PointType> new_cloud;
+//     pcl::io::loadPCDFile(cloud_data, new_cloud);
+//     cloud = new_cloud.makeShared();
+//   }
+  
+// }
+// Serialize an Eigen::Quaternionf
+template<class Archive>
+void serialize(Archive& ar, Eigen::Quaternionf& q, const unsigned int /*version*/) {
+  ar & q.x() & q.y() & q.z() & q.w();
+}
+
+// Serialize an Eigen::Vector3f
+template<class Archive>
+void serialize(Archive& ar, Eigen::Vector3f& v, const unsigned int /*version*/) {
+  ar & v.x() & v.y() & v.z();
+}
 
 } // namespace serialization
 } // namespace boost
 
-
-
-
-bool dlio::OdomNode::saveMap() {
-  std::ofstream ofs(this->map_file_, std::ios::binary);
+bool dlio::OdomNode::saveMap(const std::string& filename) {
+  std::ofstream ofs(filename, std::ios::binary);
   boost::archive::binary_oarchive oa(ofs);
-  oa << BOOST_SERIALIZATION_NVP(this->keyframes) \
-     << BOOST_SERIALIZATION_NVP(this->keyframe_normals);
+  std::cout << "in savemap" << std::endl;
+  oa << BOOST_SERIALIZATION_NVP(this->keyframes);
+  std::cout << "saved keyframes" << std::endl;
+  oa << BOOST_SERIALIZATION_NVP(this->keyframe_normals);
+
+  return true;
 }
 
 bool dlio::OdomNode::loadMap() {
+  std::filesystem::path path(this->map_file_);
+  if (!std::filesystem::exists(path)) {
+      RCLCPP_ERROR(this->get_logger(), "Map file %s does not exist!", this->map_file_.c_str());
+      rclcpp::shutdown();
+      return false;
+  }
+  
   std::ifstream ifs(this->map_file_, std::ios::binary);
   boost::archive::binary_iarchive ia(ifs);
   ia >> BOOST_SERIALIZATION_NVP(this->keyframes) \
      >> BOOST_SERIALIZATION_NVP(this->keyframe_normals);
+  RCLCPP_ERROR(this->get_logger(), "Loaded map from %s", this->map_file_.c_str());
+  return true;
+}
+
+std::string getDateTimeString() {
+    auto now = std::chrono::system_clock::now();
+    auto now_c = std::chrono::system_clock::to_time_t(now);
+    std::stringstream ss;
+    ss << std::put_time(std::localtime(&now_c), "%Y%m%d_%H%M%S");
+    return ss.str();
+}
+
+std::string getNewFilename(const std::string& filename) {
+    std::filesystem::path path(filename);
+    if (!std::filesystem::exists(path))
+        return filename;
+
+    // Append date-time modifier to the filename
+    std::string newFilename = path.stem().string() + "_" + getDateTimeString() + path.extension().string();
+    return newFilename;
+}
+
+void dlio::OdomNode::on_shutdown_callback() {
+  printf("In shutdown!\n");
+  if (this->run_mode_ >= 1) {
+    std::string newFilename = getNewFilename(this->map_file_);
+  
+    if (this->map_file_ != newFilename) {
+      RCLCPP_INFO(this->get_logger(), "Map already exists. Renaming to %s.", newFilename.c_str());
+        // std::cout << "Map file already exists. Renaming to: " << newFilename << std::endl;
+    }
+    RCLCPP_INFO(this->get_logger(), "Saving map to %s!", newFilename.c_str());
+    printf("Saving map to %s! \n", newFilename.c_str());
+    saveMap(newFilename);
+    RCLCPP_INFO(this->get_logger(), "Saved map to %s!", newFilename.c_str());
+  }
 }

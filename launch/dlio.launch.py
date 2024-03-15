@@ -28,7 +28,7 @@ def generate_launch_description():
     gps_denied_topic = LaunchConfiguration('gps_denied_topic', default='/gps_is_denied')
     map_file = LaunchConfiguration('map_file', default='map.bin')
     run_mode = LaunchConfiguration('run_mode', default=1)
-
+    
     # Define arguments
     declare_rviz_arg = DeclareLaunchArgument(
         'rviz',
@@ -65,16 +65,6 @@ def generate_launch_description():
         default_value=gps_denied_topic,
         description='GPS denied topic name'
     )
-    declare_map_file_arg = DeclareLaunchArgument(
-        'map_file',
-        default_value=map_file,
-        description='Map file to load or save to'
-    )
-    declare_run_mode_arg = DeclareLaunchArgument(
-        'run_mode',
-        default_value=run_mode,
-        description='Run mode: 0 - just mapping; 1 - localization with prebuilt map; 2 - full SLAM'
-    )
 
     # Load parameters
     dlio_yaml_path = PathJoinSubstitution([current_pkg, 'cfg', 'dlio.yaml'])
@@ -85,7 +75,7 @@ def generate_launch_description():
         package='direct_lidar_inertial_odometry',
         executable='dlio_odom_node',
         output='screen',
-        parameters=[dlio_yaml_path, dlio_params_yaml_path],
+        parameters=[dlio_yaml_path, dlio_params_yaml_path, {'run_mode': run_mode}, {'map_file': map_file}],
         remappings=[
             ('pointcloud', pointcloud_topic),
             ('imu', imu_topic),
@@ -135,8 +125,6 @@ def generate_launch_description():
         declare_gps_denied_topic_arg,
         dlio_odom_node,
         dlio_map_node,
-        declare_map_file_arg,
-        declare_run_mode_arg
         # Node(
         #     package='tf2_ros',
         #     executable='static_transform_publisher',
