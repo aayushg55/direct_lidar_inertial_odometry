@@ -34,7 +34,7 @@ dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
   this->deskew_status = false;
   this->deskew_size = 0;
 
-  rclcpp::QoS qos_profile = rclcpp::QoS(rclcpp::KeepLast(1))  // Keep the last 10 messages
+  rclcpp::QoS qos_profile = rclcpp::QoS(rclcpp::KeepLast(1))  // Keep the last message
           .best_effort()            // Use best-effort reliability
           .durability_volatile();
 
@@ -56,11 +56,11 @@ dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
   this->gps_pose_sub = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("gps_pose", qos_profile,
       std::bind(&dlio::OdomNode::callbackGpsPose, this, std::placeholders::_1), gps_pose_sub_opt);
 
-  // this->gps_orientation_cb_group = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-  // auto gps_orientation_sub_opt = rclcpp::SubscriptionOptions();
-  // gps_orientation_sub_opt.callback_group = this->gps_orientation_cb_group;
-  // this->gps_orientation_sub = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("gps_orientation", rclcpp::SensorDataQoS(),
-  //     std::bind(&dlio::OdomNode::callbackGpsOrientation, this, std::placeholders::_1), gps_orientation_sub_opt);
+  this->gps_orientation_cb_group = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  auto gps_orientation_sub_opt = rclcpp::SubscriptionOptions();
+  gps_orientation_sub_opt.callback_group = this->gps_orientation_cb_group;
+  this->gps_orientation_sub = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("gps_orientation", rclcpp::SensorDataQoS(),
+      std::bind(&dlio::OdomNode::callbackGpsOrientation, this, std::placeholders::_1), gps_orientation_sub_opt);
 
   this->gps_denied_cb_group = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   auto gps_denied_sub_opt = rclcpp::SubscriptionOptions();
@@ -539,8 +539,8 @@ void dlio::OdomNode::getScanFromROS(const sensor_msgs::msg::PointCloud2::SharedP
   pcl::removeNaNFromPointCloud(*original_scan_, *original_scan_, idx);
 
   // Crop Box Filter
-  this->crop.setInputCloud(original_scan_);
-  this->crop.filter(*original_scan_);
+  // this->crop.setInputCloud(original_scan_);
+  // this->crop.filter(*original_scan_);
 
   // automatically detect sensor type
   this->sensor = dlio::SensorType::UNKNOWN;
@@ -1422,11 +1422,12 @@ void dlio::OdomNode::propagateGICP() {
 
     // interpolate pose for lidar
     if (!(this->gps_switched_on == 2)) {
-      double time_now = this->get_clock()->now().seconds();
+      // double time_now = this->get_clock()->now().seconds();
+      double time_now = this->imu_stamp.seconds();
       double dt_gps = time_now - this->gps_position.stamp;
       printf("dt_gps %f\n", dt_gps);
       printf("time now: %f , time gps_local %f , time_gps_real %f \n", time_now, last_gps_recorded_local_time, this->gps_position.stamp);
-      if (dt_gps > 0.51) {
+      if (dt_gps > 0.06) {
         printf("dt_gps too large\n");
         p << t(0,3), t(1,3), t(2,3);
       } else if (dt_gps > 0) {
@@ -2318,3 +2319,5 @@ void dlio::OdomNode::debug() {
   std::cout << "+-------------------------------------------------------------------+" << std::endl;
 
 }
+
+

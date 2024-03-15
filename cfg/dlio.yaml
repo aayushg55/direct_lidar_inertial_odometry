@@ -18,7 +18,7 @@
     adaptive: true
 
     pointcloud/deskew: false
-    pointcloud/voxelize: true
+    pointcloud/voxelize: false
 
     imu/calibration: true
     imu/intrinsics/accel/bias: [ 0.0, 0.0, 0.0 ]
