@@ -31,6 +31,15 @@
 #include <boost/range/adaptor/indexed.hpp>
 #include <boost/range/adaptor/adjacent_filtered.hpp>
 
+// BOOST SERIALIZATION
+#include <boost/archive/text_oarchive.hpp>
+#include <boost/archive/text_iarchive.hpp>
+#include <boost/serialization/vector.hpp>
+#include <boost/serialization/list.hpp>
+#include <boost/serialization/shared_ptr.hpp>
+#include <boost/serialization/utility.hpp>
+#include <fstream>
+
 // PCL
 #include <pcl/filters/crop_box.h>
 #include <pcl/filters/voxel_grid.h>
@@ -112,6 +121,9 @@ private:
   void pauseSubmapBuildIfNeeded();
 
   void debug();
+
+  bool saveMap();
+  bool loadMap();
 
   rclcpp::TimerBase::SharedPtr publish_timer;
 
@@ -367,6 +379,9 @@ private:
 
   bool vf_use_;
   double vf_res_;
+
+  std::string map_file_;
+  int run_mode_;
 
   bool imu_calibrate_;
   bool calibrate_gyro_;

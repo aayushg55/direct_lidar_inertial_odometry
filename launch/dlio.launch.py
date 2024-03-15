@@ -26,6 +26,8 @@ def generate_launch_description():
     gps_orientation_topic = LaunchConfiguration('gps_orientation_topic', default='/gps_bot/orientation')
     output_pose_topic = LaunchConfiguration('output_pose_topic', default='/dlio/odom_node/pose')
     gps_denied_topic = LaunchConfiguration('gps_denied_topic', default='/gps_is_denied')
+    map_file = LaunchConfiguration('map_file', default='map.bin')
+    run_mode = LaunchConfiguration('run_mode', default=1)
 
     # Define arguments
     declare_rviz_arg = DeclareLaunchArgument(
@@ -63,6 +65,17 @@ def generate_launch_description():
         default_value=gps_denied_topic,
         description='GPS denied topic name'
     )
+    declare_map_file_arg = DeclareLaunchArgument(
+        'map_file',
+        default_value=map_file,
+        description='Map file to load or save to'
+    )
+    declare_run_mode_arg = DeclareLaunchArgument(
+        'run_mode',
+        default_value=run_mode,
+        description='Run mode: 0 - just mapping; 1 - localization with prebuilt map; 2 - full SLAM'
+    )
+
     # Load parameters
     dlio_yaml_path = PathJoinSubstitution([current_pkg, 'cfg', 'dlio.yaml'])
     dlio_params_yaml_path = PathJoinSubstitution([current_pkg, 'cfg', 'params.yaml'])
@@ -121,7 +134,9 @@ def generate_launch_description():
         declare_output_pose_topic_arg,
         declare_gps_denied_topic_arg,
         dlio_odom_node,
-        dlio_map_node
+        dlio_map_node,
+        declare_map_file_arg,
+        declare_run_mode_arg
         # Node(
         #     package='tf2_ros',
         #     executable='static_transform_publisher',

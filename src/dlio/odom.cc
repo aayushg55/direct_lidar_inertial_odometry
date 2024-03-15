@@ -259,6 +259,10 @@ void dlio::OdomNode::getParams() {
   // Adaptive Parameters
   dlio::declare_param(this, "adaptive", this->adaptive_params_, true);
 
+  // Map serialization
+  dlio::declare_param(this, "map_file", this->map_file_, "map.bin");
+  dlio::declare_param(this, "run_mode", this->run_mode_, 0);
+
   // Extrinsics
   std::vector<double> t_default{0., 0., 0.};
   std::vector<double> R_default{1., 0., 0., 0., 1., 0., 0., 0., 1.};
@@ -2320,4 +2324,64 @@ void dlio::OdomNode::debug() {
 
 }
 
+// Provide serialization for custom data types
+namespace boost {
+namespace serialization {
 
+template <class Archive>
+void serialize(Archive& ar, nano_gicp::CovarianceList& list, const unsigned int /*version*/) {
+  ar & boost::serialization::make_nvp("covarianceList", list);
+}
+
+template <class Archive, typename PointType>
+void serialize(Archive& ar, pcl::PointCloud<PointType>::ConstPtr& cloud, const unsigned int /*version*/) {
+  std::stringstream ss;
+  std::string cloud_data;
+
+  if (Archive::is_saving::value) {
+    pcl::io::savePCDFileBinary(ss, *cloud);
+    cloud_data = ss.str();
+  }
+
+  ar & cloud_data;
+
+  if (Archive::is_loading::value) {
+    std::stringstream ss(cloud_data);
+    pcl::PointCloud<PointType> new_cloud;
+    pcl::io::loadPCDFile(ss, new_cloud);
+    cloud = new_cloud.makeShared();
+  }
+  
+}
+// // Serialize an Eigen::Quaternionf
+// template<class Archive>
+// void serialize(Archive& ar, Eigen::Quaternionf& q, const unsigned int /*version*/) {
+//   ar & q.x() & q.y() & q.z() & q.w();
+// }
+
+// // Serialize an Eigen::Vector3f
+// template<class Archive>
+// void serialize(Archive& ar, Eigen::Vector3f& v, const unsigned int /*version*/) {
+//   ar & v.x() & q.y() & q.z();
+// }
+
+
+} // namespace serialization
+} // namespace boost
+
+
+
+
+bool dlio::OdomNode::saveMap() {
+  std::ofstream ofs(this->map_file_, std::ios::binary);
+  boost::archive::binary_oarchive oa(ofs);
+  oa << BOOST_SERIALIZATION_NVP(this->keyframes) \
+     << BOOST_SERIALIZATION_NVP(this->keyframe_normals);
+}
+
+bool dlio::OdomNode::loadMap() {
+  std::ifstream ifs(this->map_file_, std::ios::binary);
+  boost::archive::binary_iarchive ia(ifs);
+  ia >> BOOST_SERIALIZATION_NVP(this->keyframes) \
+     >> BOOST_SERIALIZATION_NVP(this->keyframe_normals);
+}
