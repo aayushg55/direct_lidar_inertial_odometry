@@ -61,12 +61,13 @@ void dlio::MapNode::publishTimer() {
     map_ros.header.stamp = this->now();
     map_ros.header.frame_id = this->odom_frame;
     this->map_pub->publish(map_ros);
-    // std::cout << "published sparse map" << std::endl;
+    std::cout << "pub sparse map with size " << this->dlio_map->points.size() << std::endl;
   }
 
 }
 
 void dlio::MapNode::callbackKeyframe(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& keyframe) {
+  std::cout << "map node: recv keyframe to map" << std::endl;
 
   // convert scan to pcl format
   pcl::PointCloud<PointType>::Ptr keyframe_pcl = std::make_shared<pcl::PointCloud<PointType>>();
@@ -79,6 +80,7 @@ void dlio::MapNode::callbackKeyframe(const sensor_msgs::msg::PointCloud2::ConstS
 
   // save filtered keyframe to map for rviz
   *this->dlio_map += *keyframe_pcl;
+  std::cout << "map node: added keyframe to map" << std::endl;
 
 }
 

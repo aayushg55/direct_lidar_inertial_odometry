@@ -171,6 +171,9 @@ private:
   std::atomic<int> deskew_size;
   std::atomic<bool> gps_available;
   std::atomic<bool> gps_denied;
+  std::atomic<bool> init_input_target;
+  std::atomic<bool> processed_map;
+
   int gps_switched_on;
 
   // Threads

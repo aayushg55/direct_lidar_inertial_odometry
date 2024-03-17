@@ -27,7 +27,7 @@ def generate_launch_description():
     output_pose_topic = LaunchConfiguration('output_pose_topic', default='/dlio/odom_node/pose')
     gps_denied_topic = LaunchConfiguration('gps_denied_topic', default='/gps_is_denied')
     map_file = LaunchConfiguration('map_file', default='map.bin')
-    run_mode = LaunchConfiguration('run_mode', default=1)
+    run_mode = LaunchConfiguration('run_mode', default=True)
     
     # Define arguments
     declare_rviz_arg = DeclareLaunchArgument(
