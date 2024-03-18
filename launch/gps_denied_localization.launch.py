@@ -23,7 +23,7 @@ def generate_launch_description():
     gps_denied_topic = LaunchConfiguration('gps_denied_topic', default='/gps_is_denied')
     map_file = LaunchConfiguration('map_file', default='map.bin')
     run_mode = LaunchConfiguration('run_mode', default=True)
-    
+
     # Define arguments
     declare_rviz_arg = DeclareLaunchArgument(
         'rviz',
@@ -74,7 +74,7 @@ def generate_launch_description():
     )
 
     pc_merger_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([pc_merger, '/launch/run.launch.py'])
+        PythonLaunchDescriptionSource([pc_merger, '/launch/run.launch.py']),
     )
     
     gps_denied_node = Node(

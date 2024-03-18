@@ -16,6 +16,7 @@
 #include <queue>
 #include "rclcpp/qos.hpp"
 using namespace std;
+#define LIDAR_FREQ 13.0
 dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
 
   this->getParams();
@@ -35,7 +36,7 @@ dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
   this->deskew_status = false;
   this->deskew_size = 0;
 
-  rclcpp::QoS qos_profile = rclcpp::QoS(rclcpp::KeepLast(1))  // Keep the last message
+  rclcpp::QoS qos_profile = rclcpp::QoS(rclcpp::KeepLast(5))  // Keep the last message
           .best_effort()            // Use best-effort reliability
           .durability_volatile();
 
@@ -135,6 +136,7 @@ dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
   this->submap_hasChanged = true;
   this->submap_kf_idx_prev.clear();
 
+  this->prev_scan_stamp = 0.;
   this->first_scan_stamp = 0.;
   this->elapsed_time = 0.;
   this->length_traversed;
@@ -415,7 +417,6 @@ void dlio::OdomNode::publishPose() {
 
 void dlio::OdomNode::publishToROS(pcl::PointCloud<PointType>::ConstPtr published_cloud, Eigen::Matrix4f T_cloud) {
   this->publishCloud(published_cloud, T_cloud);
-  // std::cout << "publishing cloud " << published_cloud.points.size() << std::endl;
   // nav_msgs::msg::Path
   this->path_ros.header.stamp = this->imu_stamp;
   this->path_ros.header.frame_id = this->odom_frame;
@@ -594,14 +595,23 @@ void dlio::OdomNode::preprocessPoints() {
 
   } else {
 
-    this->scan_stamp = rclcpp::Time(this->scan_header_stamp).seconds();
-    cout << "recv pc at " << this->scan_stamp << endl;
+    if (this->prev_scan_stamp == 0.) {
+      this->scan_stamp = this->first_scan_stamp;
+    } else {
+      this->scan_stamp = this->prev_scan_stamp + 1.0/LIDAR_FREQ;
+    }
+    // this->scan_stamp = rclcpp::Time(this->scan_header_stamp).seconds();
+    cout << "prev_scan_stamp at " << to_string_with_precision(this->prev_scan_stamp, 8)<< endl;
+    cout << "first_scan_stamp at " << to_string_with_precision(this->first_scan_stamp, 8)<< endl;
+
+    cout << "recv pc at " << to_string_with_precision(this->scan_stamp, 8)<< endl;
     // don't process scans until IMU data is present
     if (!this->first_valid_scan) {
       if (this->imu_buffer.empty() || this->scan_stamp <= this->imu_buffer.back().stamp) {
+        cout << "return from preprocess as imu empty" << endl;
         return;
       }
-
+      cout << "setting up first scan" << endl;
       this->first_valid_scan = true;
       if (!this->gps_denied)
         this->T_prior = this->T_gps;
@@ -609,7 +619,7 @@ void dlio::OdomNode::preprocessPoints() {
         this->T_prior = this->T; // assume no motion for the first scan
 
     } else {
-
+    cout << "first valid scan, doing second scan" << endl;
       // IMU prior for second scan onwards
     std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> frames;
     if (!this->gps_denied) {
@@ -847,7 +857,7 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::Sha
   if (!this->first_valid_scan) {
     return;
   }
-
+  cout << "preprocessed, first valid scan" << endl;
   if (this->current_scan->points.size() <= this->gicp_min_num_points_) {
     RCLCPP_FATAL(this->get_logger(), "Low number of points in the cloud!");
     return;
@@ -861,9 +871,11 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::Sha
   if (this->adaptive_params_) {
     this->setAdaptiveParams();
   }
+  cout << "set adapt param" << endl;
 
   // Set new frame as input source
   this->setInputSource();
+  cout << "set inp" << endl;
 
   // Set initial frame as first keyframe
   if (!this->init_input_target) {
@@ -877,7 +889,7 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::Sha
   // Get the next pose via IMU + S2M + GEO
   this->getNextPose();
   cout << "got pose" << endl;
-  
+
   // Update current keyframe poses and map
   if (this->run_mode_ >= 1)
     this->updateKeyframes();
@@ -1603,9 +1615,16 @@ void dlio::OdomNode::updateState() {
   qcorr = qhat * qcorr;
 
   Eigen::Vector3f err = pin - this->state.p;
+  if (err[2] > 2.0 and this->gps_denied) {
+    this->lidarPose.p[2] = 0;
+    pin[2] = 0;
+    err[2] = -this->state.p[2]; // fix z value at 0
+  }
   Eigen::Vector3f err_body;
 
   err_body = qhat.conjugate()._transformVector(err);
+ 
+
   double e_norm = err.norm();
   if (e_norm > 5) {
     printf("large err!: err_norm is %f \n", e_norm);
@@ -2249,7 +2268,7 @@ void dlio::OdomNode::debug() {
   std::string asc_time = std::asctime(std::localtime(&curr_time)); asc_time.pop_back();
   std::cout << "| " << std::left << asc_time;
   std::cout << std::right << std::setfill(' ') << std::setw(42)
-    << "Elapsed Time: " + to_string_with_precision(this->elapsed_time, 2) + " seconds "
+    << "Elapsed Time: " + to_string_with_precision(this->elapsed_time, 3) + " seconds "
     << "|" << std::endl;
 
   if ( !this->cpu_type.empty() ) {
