@@ -163,6 +163,7 @@ private:
   std::atomic<bool> first_valid_scan;
   std::atomic<bool> first_imu_received;
   std::atomic<bool> first_gps_pose_recieved;
+  std::atomic<bool> gps_started;
   std::atomic<bool> first_gps_orientation_recieved;
   std::atomic<bool> imu_calibrated;
   std::atomic<bool> submap_hasChanged;

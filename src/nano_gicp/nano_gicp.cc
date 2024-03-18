@@ -44,7 +44,7 @@
 
 #include "dlio/dlio.h"
 #include "nano_gicp/nano_gicp.h"
-
+#define MAX_THREADS 2
 template class nano_gicp::NanoGICP<PointType, PointType>;
 
 namespace nano_gicp {
@@ -56,7 +56,7 @@ NanoGICP<PointSource, PointTarget>::NanoGICP() {
 #else
   num_threads_ = 1;
 #endif
-
+  num_threads_ = MAX_THREADS;
   k_correspondences_ = 20;
   reg_name_ = "NanoGICP";
   corr_dist_threshold_ = std::numeric_limits<float>::max();
@@ -69,7 +69,7 @@ NanoGICP<PointSource, PointTarget>::~NanoGICP() {}
 
 template <typename PointSource, typename PointTarget>
 void NanoGICP<PointSource, PointTarget>::setNumThreads(int n) {
-  num_threads_ = n;
+  num_threads_ = MAX_THREADS;
 
 #ifdef _OPENMP
   if (n == 0) {

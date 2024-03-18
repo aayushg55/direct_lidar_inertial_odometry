@@ -18,9 +18,9 @@
     frames/lidar: luminar_front
     frames/imu: imu_bottom
 
-    map/waitUntilMove: true
+    map/waitUntilMove: false
     map/dense/filtered: false
-    map/sparse/frequency: 1.0
+    map/sparse/frequency: 0.5
     map/sparse/leafSize: 0.25
 
     odom/gravity: 9.80665

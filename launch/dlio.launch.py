@@ -27,7 +27,7 @@ def generate_launch_description():
     output_pose_topic = LaunchConfiguration('output_pose_topic', default='/dlio/odom_node/pose')
     gps_denied_topic = LaunchConfiguration('gps_denied_topic', default='/gps_is_denied')
     map_file = LaunchConfiguration('map_file', default='map.bin')
-    run_mode = LaunchConfiguration('run_mode', default=True)
+    run_mode = LaunchConfiguration('run_mode', default=0)
     
     # Define arguments
     declare_rviz_arg = DeclareLaunchArgument(
@@ -104,15 +104,15 @@ def generate_launch_description():
     )
 
     # RViz node
-    # rviz_config_path = PathJoinSubstitution([current_pkg, 'launch', 'dlio.rviz'])
-    # rviz_node = Node(
-    #     package='rviz2',
-    #     executable='rviz2',
-    #     name='dlio_rviz',
-    #     arguments=['-d', rviz_config_path],
-    #     output='screen',
-    #     condition=IfCondition(LaunchConfiguration('rviz'))
-    # )
+    rviz_config_path = PathJoinSubstitution([current_pkg, 'launch', 'dlio.rviz'])
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='dlio_rviz',
+        arguments=['-d', rviz_config_path],
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('rviz'))
+    )
 
     return LaunchDescription([
         launch_ros.actions.SetParameter(name='use_sim_time', value=True),
@@ -132,5 +132,5 @@ def generate_launch_description():
         #     #parameters=[parameter_file],
         #     output='screen'
         # )
-        # rviz_node
+        rviz_node
     ])

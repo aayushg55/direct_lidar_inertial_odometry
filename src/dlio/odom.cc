@@ -20,13 +20,14 @@ dlio::OdomNode::OdomNode() : Node("dlio_odom_node") {
 
   this->getParams();
 
-  this->num_threads_ = omp_get_max_threads();
+  this->num_threads_ = 2;
 
   this->dlio_initialized = false;
   this->first_valid_scan = false;
   this->first_imu_received = false;
   this->first_gps_orientation_recieved = false;
   this->first_gps_pose_recieved = false;
+  this->gps_started = false;
 
   if (this->imu_calibrate_) {this->imu_calibrated = false;}
   else {this->imu_calibrated = true;}
@@ -518,12 +519,11 @@ void dlio::OdomNode::publishKeyframe(std::pair<std::pair<Eigen::Vector3f, Eigen:
   p.orientation.y = kf.first.second.y();
   p.orientation.z = kf.first.second.z();
   this->kf_pose_ros.poses.push_back(p);
-  cout << "pushed back kf successfully!" << endl;
+
   // Publish
   this->kf_pose_ros.header.stamp = timestamp;
   this->kf_pose_ros.header.frame_id = this->odom_frame;
   this->kf_pose_pub->publish(this->kf_pose_ros);
-  cout << "published kf_pose_pub successfully!" << endl;
 
   // publish keyframe scan for map
   if (this->vf_use_) {
@@ -535,15 +535,12 @@ void dlio::OdomNode::publishKeyframe(std::pair<std::pair<Eigen::Vector3f, Eigen:
       this->kf_cloud_pub->publish(keyframe_cloud_ros);
     }
   } else {
-    cout << "dont use vfm aboout to pub kf scan" << endl;
-    cout << kf.second->points.size() << " " <<  kf.second->width * kf.second->height << endl;
     sensor_msgs::msg::PointCloud2 keyframe_cloud_ros;
     pcl::toROSMsg(*kf.second, keyframe_cloud_ros);
     keyframe_cloud_ros.header.stamp = timestamp;
     keyframe_cloud_ros.header.frame_id = this->odom_frame;
     this->kf_cloud_pub->publish(keyframe_cloud_ros);
   }
-  cout << "published kf cloud successfully!" << endl;
 }
 
 void dlio::OdomNode::getScanFromROS(const sensor_msgs::msg::PointCloud2::SharedPtr& pc) {
@@ -598,23 +595,20 @@ void dlio::OdomNode::preprocessPoints() {
   } else {
 
     this->scan_stamp = rclcpp::Time(this->scan_header_stamp).seconds();
-
+    cout << "recv pc at " << this->scan_stamp << endl;
     // don't process scans until IMU data is present
     if (!this->first_valid_scan) {
-      cout << "not first valid scan" << endl;
       if (this->imu_buffer.empty() || this->scan_stamp <= this->imu_buffer.back().stamp) {
         return;
       }
-      cout << "imu not empty" << endl;
+
       this->first_valid_scan = true;
       if (!this->gps_denied)
         this->T_prior = this->T_gps;
       else
         this->T_prior = this->T; // assume no motion for the first scan
-      cout << "set as valid" << endl;
 
     } else {
-      cout << "first scan is valid" << endl;
 
       // IMU prior for second scan onwards
     std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> frames;
@@ -802,7 +796,6 @@ void dlio::OdomNode::initializeInputTarget() {
     this->keyframe_transformations.push_back(this->T_corr);
   }
   this->init_input_target = true;
-  cout << "init_input_target" << this->init_input_target << endl;
   cout << "did initializeInputTarget, keyframes size: " << this->keyframes.size() << endl;
 }
 
@@ -815,7 +808,7 @@ void dlio::OdomNode::initializeDLIO() {
 
   // Wait for IMU and GPS
   if (!this->first_imu_received || !this->imu_calibrated 
-      || !this->first_gps_pose_recieved
+      || !this->first_gps_pose_recieved || !this->gps_started
       || (this->run_mode_ == 0 && !this->processed_map)) {
     return;
   }
@@ -840,20 +833,17 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::Sha
   if (this->first_scan_stamp == 0.) {
     this->first_scan_stamp = rclcpp::Time(pc->header.stamp).seconds();
   }
-  cout << "before dlio init" << endl;
 
   // DLIO Initialization procedures (IMU calib, gravity align)
   if (!this->dlio_initialized) {
     return;
   }
-  cout << "dlio init" << endl;
 
   // Convert incoming scan into DLIO format
   this->getScanFromROS(pc);
 
   // Preprocess points
   this->preprocessPoints();
-  cout << "preprocessed points" << endl;
   if (!this->first_valid_scan) {
     return;
   }
@@ -874,12 +864,9 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::Sha
 
   // Set new frame as input source
   this->setInputSource();
-  cout << "set input source" << endl;
-  cout << "kf size: " << this->keyframes.size() << endl;
 
   // Set initial frame as first keyframe
   if (!this->init_input_target) {
-    cout << "going into initializeInputTarget " << endl;
     this->initializeInputTarget();
     this->main_loop_running = false;
     this->submap_future =
@@ -887,10 +874,10 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::Sha
     this->submap_future.wait(); // wait until completion
     return;
   }
-  cout << "getting next pose" << endl;
   // Get the next pose via IMU + S2M + GEO
   this->getNextPose();
-
+  cout << "got pose" << endl;
+  
   // Update current keyframe poses and map
   if (this->run_mode_ >= 1)
     this->updateKeyframes();
@@ -910,6 +897,7 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::Sha
   // Update trajectory
   this->trajectory.push_back( std::make_pair(this->state.p, this->state.q) );
 
+  cout << "lidar time diff: " << this->scan_stamp - this->prev_scan_stamp << endl;
   // Update time stamps
   this->lidar_rates.push_back( 1. / (this->scan_stamp - this->prev_scan_stamp) );
   this->prev_scan_stamp = this->scan_stamp;
@@ -956,9 +944,6 @@ void dlio::OdomNode::callbackGpsPose(const geometry_msgs::msg::PoseWithCovarianc
 
   std::cout << "recieved gps pose at " << this->gps_position.stamp << std::endl;
   printf("gps pose: %f %f %f \n", this->gps_position.p[0], this->gps_position.p[1], this->gps_position.p[2]);
-  // this->T_gps(0,3) = this->gps_position.p[0];
-  // this->T_gps(1,3) = this->gps_position.p[1];
-  // this->T_gps(2,3) = this->gps_position.p[2];
   this->T_gps.block(0, 3, 3, 1) = this->gps_position.p;
 }
 
@@ -968,6 +953,10 @@ void dlio::OdomNode::callbackGpsDenied(const std_msgs::msg::Bool::SharedPtr gps_
     this->gps_switched_on += 1;
     std::cout << "recieved gps signal: switched!!" << std::endl;
   }
+
+  if (!this->gps_started)
+    gps_started = true;
+
   this->gps_denied = gps_denied->data;
   if (this->gps_denied)
     printf("gps is denied\n");
@@ -994,7 +983,6 @@ void dlio::OdomNode::callbackGpsOrientation(const geometry_msgs::msg::PoseWithCo
 }
 
 void dlio::OdomNode::callbackImu(const sensor_msgs::msg::Imu::SharedPtr imu_raw) {
-  cout << "callbackimu" << endl;
   this->first_imu_received = true;
   this->imu_calibrated = true;
   if (!this->dlio_initialized) {
@@ -1461,7 +1449,7 @@ void dlio::OdomNode::propagateGICP() {
       printf("dt_gps %f\n", dt_gps);
       printf("time now: %f , time gps_local %f , time_gps_real %f \n", time_now, last_gps_recorded_local_time, this->gps_position.stamp);
       if (dt_gps > 0.06) {
-        printf("dt_gps too large\n");
+        printf("dt_gps too large, using calc trans\n");
         p << t(0,3), t(1,3), t(2,3);
       } else if (dt_gps > 0) {
         p += this->state.v.lin.w * dt_gps; //possibly bad if velocity wrong but clean gps
@@ -2144,7 +2132,6 @@ void dlio::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
   this->pauseSubmapBuildIfNeeded();
 
   this->buildSubmap(vehicle_state);
-  cout << "built submap" << endl;
 }
 
 void dlio::OdomNode::pauseSubmapBuildIfNeeded() {
@@ -2153,26 +2140,14 @@ void dlio::OdomNode::pauseSubmapBuildIfNeeded() {
 }
 
 void dlio::OdomNode::processLoadedMap() {
-  cout << "in process map" << endl;
   // transform the new keyframe(s) and associated covariance list(s)
   std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
-  cout << "got lock" << endl;
 
   for (int i = this->num_processed_keyframes; i < this->keyframes.size(); i++) {
-    lock.unlock();
-
     ++this->num_processed_keyframes;
 
-    lock.lock();
-    cout << "in loop at " << i << endl;
     publishKeyframe(this->keyframes[i], this->get_clock()->now());
-    // this->publish_keyframe_thread = std::thread( &dlio::OdomNode::publishKeyframe, this,  );
-    // this->publish_keyframe_thread.detach();
-    cout << "detactched thread at " << i << endl;
-
   }
-  cout << "kf size after process" << this->keyframes.size() << endl;
-  cout << "finished processing map lock" << endl;
 
   lock.unlock();
 }
@@ -2283,27 +2258,27 @@ void dlio::OdomNode::debug() {
       << "|" << std::endl;
   }
 
-  // if (this->sensor == dlio::SensorType::OUSTER) {
-  //   std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
-  //     << "Sensor Rates: Ouster @ " + to_string_with_precision(avg_lidar_rate, 2)
-  //                                  + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
-  //     << "|" << std::endl;
-  // } else if (this->sensor == dlio::SensorType::VELODYNE) {
-  //   std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
-  //     << "Sensor Rates: Velodyne @ " + to_string_with_precision(avg_lidar_rate, 2)
-  //                                    + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
-  //     << "|" << std::endl;
-  // } else if (this->sensor == dlio::SensorType::HESAI) {
-  //   std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
-  //     << "Sensor Rates: Hesai @ " + to_string_with_precision(avg_lidar_rate, 2)
-  //                                 + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
-  //     << "|" << std::endl;
-  // } else {
-  //   std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
-  //     << "Sensor Rates: Unknown LiDAR @ " + to_string_with_precision(avg_lidar_rate, 2)
-  //                                         + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
-  //     << "|" << std::endl;
-  // }
+  if (this->sensor == dlio::SensorType::OUSTER) {
+    std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
+      << "Sensor Rates: Ouster @ " + to_string_with_precision(avg_lidar_rate, 2)
+                                   + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
+      << "|" << std::endl;
+  } else if (this->sensor == dlio::SensorType::VELODYNE) {
+    std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
+      << "Sensor Rates: Velodyne @ " + to_string_with_precision(avg_lidar_rate, 2)
+                                     + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
+      << "|" << std::endl;
+  } else if (this->sensor == dlio::SensorType::HESAI) {
+    std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
+      << "Sensor Rates: Hesai @ " + to_string_with_precision(avg_lidar_rate, 2)
+                                  + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
+      << "|" << std::endl;
+  } else {
+    std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
+      << "Sensor Rates: Unknown LiDAR @ " + to_string_with_precision(avg_lidar_rate, 2)
+                                          + " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) + " Hz"
+      << "|" << std::endl;
+  }
 
   std::cout << "|===================================================================|" << std::endl;
 
@@ -2385,12 +2360,6 @@ void dlio::OdomNode::debug() {
 namespace boost {
 namespace serialization {
 
-// template <class Archive>
-// void serialize(Archive& ar, const nano_gicp::CovarianceList& list, const unsigned int /*version*/) {
-//   cout << "covariance size " << list.size() << endl;
-//   ar & boost::serialization::make_nvp("covarianceList", list);
-// }
-
 template <class Archive>
 void save(Archive& ar, const nano_gicp::CovarianceList& list, const unsigned int /*version*/) {
     size_t size = list.size();
@@ -2406,7 +2375,6 @@ void load(Archive& ar, nano_gicp::CovarianceList& list, const unsigned int /*ver
     ar & size;
     list.clear();
     list.reserve(size);
-    cout << "keyframe normals size: " << size << endl;
     for (size_t i = 0; i < size; ++i) {
         Eigen::Matrix4d mat;
         ar & mat;
@@ -2438,13 +2406,9 @@ void serialize(Archive& ar, PointType& point, const unsigned int /*version*/) {
 
 template <class Archive>
 void serialize(Archive& ar, pcl::PointCloud<PointType>& cloud, const unsigned int /*version*/) {
-  cout << "in cloud serialize" << endl;
     if (Archive::is_saving::value) {
         size_t size = cloud.points.size();
         ar & size;
-        cout << "cloud size " << size << endl;
-        cout << "cloud width " << cloud.width << " cloud height " << cloud.height << endl;
-
         ar & boost::serialization::make_array(cloud.points.data(), size);
     } else {
         size_t size;
@@ -2456,40 +2420,6 @@ void serialize(Archive& ar, pcl::PointCloud<PointType>& cloud, const unsigned in
     }
 }
 
-// template <class Archive>
-// void serialize(Archive& ar, pcl::PointCloud<PointType>::Ptr& cloud, const unsigned int /*version*/) {
-//   std::vector<PointType> data;
-//   if (Archive::is_saving::value) {
-//     cout << "cloud width " << cloud.width << " cloud height " << cloud.height << endl;
-//     data.assign(cloud->points.begin(), cloud->points.end());
-//   }
-//   ar & (data);
-//   if (Archive::is_loading::value) {
-//     // pcl::PointCloud<PointType>::Ptr new_cloud(new pcl::PointCloud<PointType>());
-//     cloud->points.assign(data.begin(), data.end());
-//     // *cloud = *new_cloud;
-//   }
-// }
-
-template <class Archive>
-void serialize(Archive& ar, std::pair<Eigen::Vector3f, Eigen::Quaternionf>& pair, const unsigned int /*version*/) {
-    ar & pair.first;
-    ar & pair.second;
-}
-
-// template <class Archive>
-// void serialize(Archive& ar, std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>, std::shared_ptr<const pcl::PointCloud<dlio::Point>>>& pair, const unsigned int /*version*/) {
-//     ar & pair.first;
-//     ar & pair.second;
-// }
-
-// template <class Archive>
-// void serialize(Archive& ar, std::vector<std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>, 
-//                                         std::shared_ptr<const pcl::PointCloud<dlio::Point>>>>& vector,
-//                                         const unsigned int /*version*/) {
-//     ar & vector;
-// }
-
 template <class Archive>
 void serialize(Archive& ar, std::vector<std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>,
                             pcl::PointCloud<PointType>::ConstPtr>>& keyframes, const unsigned int /*version*/) {
@@ -2497,29 +2427,19 @@ void serialize(Archive& ar, std::vector<std::pair<std::pair<Eigen::Vector3f, Eig
         size_t size = keyframes.size();
         ar & size;
         for (auto& keyframe : keyframes) {
-          // std::pair<Eigen::Vector3f, Eigen::Quaternionf> vq = keyframe.first;
           ar & keyframe.first.first;  // Serialize Eigen::Vector3f
           ar & keyframe.first.second; // Serialize Eigen::Quaternionf
           
           // // Convert ConstPtr to Ptr for serialization
           pcl::PointCloud<PointType>::Ptr cloud =  std::make_shared<pcl::PointCloud<PointType>>(*keyframe.second);
-          cout << "will save cloud of size " << cloud->points.size() << endl;
-          // // // pcl::PointCloud<PointType>::Ptr cloud(new pcl::PointCloud<PointType>(*keyframe.second));
           size_t size = cloud->points.size();
           ar & size;
-          cout << "cloud size " << size << endl;
-          cout << "cloud width " << cloud->width << " cloud height " << cloud->height << endl;
-
-          for (int i = 0; i <= 10; i++) {
-            cout << "point " << i << " " << cloud->points[i].data[0] << " " << cloud->points[i].data[1] << " " << cloud->points[i].data[2] << endl;
-          }
 
           ar & boost::serialization::make_array(cloud->points.data(), size);
         }
     } else {
         size_t num_kf;
         ar & num_kf;
-        cout << "num kf " << num_kf << endl;
         keyframes.clear();
         keyframes.reserve(num_kf);
         for (size_t i = 0; i < num_kf; ++i) {
@@ -2527,48 +2447,20 @@ void serialize(Archive& ar, std::vector<std::pair<std::pair<Eigen::Vector3f, Eig
           Eigen::Quaternionf orientation;
           pcl::PointCloud<PointType>::Ptr cloud(new pcl::PointCloud<PointType>);
           size_t size;
-          cout << "parsing keyframe " << i << endl;
 
           ar & position;
           ar & orientation;
           ar & size;
 
-          cout << "kf size " << size << endl;
           cloud->points.resize(size);
           cloud->width = size;
           cloud->height = 1;
-          cout << "resized" << endl;
           ar & boost::serialization::make_array(cloud->points.data(), size);
-          for (int j = 0; j <= 10; j++) {
-            cout << "read point " << j << " " << cloud->points[j].data[0] << " " << cloud->points[j].data[1] << " " << cloud->points[j].data[2] << endl;
-          }
-          cout << "made arr " << endl;
+
           keyframes.emplace_back(std::make_pair(position, orientation), cloud);
-          cout << "parsed keyframe " << i << endl;
         }
     }
 }
-
-// template <class Archive>
-// void serialize(Archive& ar, pcl::PointCloud<PointType>::ConstPtr& cloud, const unsigned int /*version*/) {
-//   std::stringstream ss;
-//   std::string cloud_data;
-
-//   if (Archive::is_saving::value) {
-//     pcl::io::savePCDFileBinary(ss, *cloud);
-//     cloud_data = ss.str();
-//   }
-
-//   ar & cloud_data;
-
-//   if (Archive::is_loading::value) {
-//     // std::stringstream ss(cloud_data);
-//     pcl::PointCloud<PointType> new_cloud;
-//     pcl::io::loadPCDFile(cloud_data, new_cloud);
-//     cloud = new_cloud.makeShared();
-//   }
-  
-// }
 
 } // namespace serialization
 } // namespace boost
@@ -2576,14 +2468,8 @@ void serialize(Archive& ar, std::vector<std::pair<std::pair<Eigen::Vector3f, Eig
 bool dlio::OdomNode::saveMap(const std::string& filename) {
   std::ofstream ofs(filename, std::ios::binary);
   boost::archive::binary_oarchive oa(ofs);
-  std::cout << "in savemap" << std::endl;
   oa & (this->keyframes);
-  std::cout << "saved keyframes" << std::endl;
-  cout << " size of keyframes: " << this->keyframes.size() << endl;
-  cout << "size of keyframe normals: " << this->keyframe_normals.size() << endl;
   oa << BOOST_SERIALIZATION_NVP(this->keyframe_normals);
-  std::cout << "saved normals" << std::endl;
-// typedef std::vector<Eigen::Matrix4d, Eigen::aligned_allocator<Eigen::Matrix4d>> CovarianceList;
 
   return true;
 }
@@ -2599,11 +2485,8 @@ bool dlio::OdomNode::loadMap() {
   std::ifstream ifs(this->map_file_, std::ios::binary);
   boost::archive::binary_iarchive ia(ifs);
 
-  cout << "loading from " << this->map_file_ << endl;
   ia & (this->keyframes);
-  cout << "keyframe size after loading " << this->keyframes.size() << endl;
   ia >> BOOST_SERIALIZATION_NVP(this->keyframe_normals);
-  cout << "size of keyframe normals after loading: " << this->keyframe_normals.size() << endl;
 
   RCLCPP_INFO(this->get_logger(), "Loaded map from %s", this->map_file_.c_str());
   return true;
@@ -2636,13 +2519,9 @@ void dlio::OdomNode::on_shutdown_callback() {
   
     if (this->map_file_ != newFilename) {
       RCLCPP_INFO(this->get_logger(), "Map already exists. Renaming to %s.", newFilename.c_str());
-        // std::cout << "Map file already exists. Renaming to: " << newFilename << std::endl;
     }
-    RCLCPP_INFO(this->get_logger(), "Saving map to %s!", newFilename.c_str());
-    printf("Saving map to %s! \n", newFilename.c_str());
     saveMap(newFilename);
     RCLCPP_INFO(this->get_logger(), "Saved map to %s!", newFilename.c_str());
-    std::cout << "finished!" << std::endl;
   }
   lock.unlock();
 }
