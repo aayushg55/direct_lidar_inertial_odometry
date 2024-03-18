@@ -601,17 +601,12 @@ void dlio::OdomNode::preprocessPoints() {
       this->scan_stamp = this->prev_scan_stamp + 1.0/LIDAR_FREQ;
     }
     // this->scan_stamp = rclcpp::Time(this->scan_header_stamp).seconds();
-    cout << "prev_scan_stamp at " << to_string_with_precision(this->prev_scan_stamp, 8)<< endl;
-    cout << "first_scan_stamp at " << to_string_with_precision(this->first_scan_stamp, 8)<< endl;
 
-    cout << "recv pc at " << to_string_with_precision(this->scan_stamp, 8)<< endl;
     // don't process scans until IMU data is present
     if (!this->first_valid_scan) {
       if (this->imu_buffer.empty() || this->scan_stamp <= this->imu_buffer.back().stamp) {
-        cout << "return from preprocess as imu empty" << endl;
         return;
       }
-      cout << "setting up first scan" << endl;
       this->first_valid_scan = true;
       if (!this->gps_denied)
         this->T_prior = this->T_gps;
@@ -619,7 +614,6 @@ void dlio::OdomNode::preprocessPoints() {
         this->T_prior = this->T; // assume no motion for the first scan
 
     } else {
-    cout << "first valid scan, doing second scan" << endl;
       // IMU prior for second scan onwards
     std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> frames;
     if (!this->gps_denied) {
@@ -645,9 +639,6 @@ void dlio::OdomNode::preprocessPoints() {
             t(2,0), t(2,1), t(2,2);
     Eigen::Quaternionf q(rotSO3);
 
-    printf("prior pose in preprocess from imu+lidar: \n");
-    printf("prior pose p: %f %f %f \n", p[0], p[1], p[2]);
-    printf("prior pose q: %f %f %f %f\n", q.x(), q.y(), q.z(), q.w());
     }
     // if (this->gps_available) {
     //   this->T_prior = this->T_gps;
@@ -806,7 +797,6 @@ void dlio::OdomNode::initializeInputTarget() {
     this->keyframe_transformations.push_back(this->T_corr);
   }
   this->init_input_target = true;
-  cout << "did initializeInputTarget, keyframes size: " << this->keyframes.size() << endl;
 }
 
 void dlio::OdomNode::setInputSource() {
@@ -833,7 +823,6 @@ void dlio::OdomNode::initializeDLIO() {
 }
 
 void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::SharedPtr pc) {
-  cout << "callbackPointCloud" << endl;
   std::unique_lock<decltype(this->main_loop_running_mutex)> lock(main_loop_running_mutex);
   this->main_loop_running = true;
   lock.unlock();
@@ -857,7 +846,6 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::Sha
   if (!this->first_valid_scan) {
     return;
   }
-  cout << "preprocessed, first valid scan" << endl;
   if (this->current_scan->points.size() <= this->gicp_min_num_points_) {
     RCLCPP_FATAL(this->get_logger(), "Low number of points in the cloud!");
     return;
@@ -871,11 +859,9 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::Sha
   if (this->adaptive_params_) {
     this->setAdaptiveParams();
   }
-  cout << "set adapt param" << endl;
 
   // Set new frame as input source
   this->setInputSource();
-  cout << "set inp" << endl;
 
   // Set initial frame as first keyframe
   if (!this->init_input_target) {
@@ -888,7 +874,6 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::Sha
   }
   // Get the next pose via IMU + S2M + GEO
   this->getNextPose();
-  cout << "got pose" << endl;
 
   // Update current keyframe poses and map
   if (this->run_mode_ >= 1)
@@ -909,7 +894,6 @@ void dlio::OdomNode::callbackPointCloud(const sensor_msgs::msg::PointCloud2::Sha
   // Update trajectory
   this->trajectory.push_back( std::make_pair(this->state.p, this->state.q) );
 
-  cout << "lidar time diff: " << this->scan_stamp - this->prev_scan_stamp << endl;
   // Update time stamps
   this->lidar_rates.push_back( 1. / (this->scan_stamp - this->prev_scan_stamp) );
   this->prev_scan_stamp = this->scan_stamp;
@@ -954,8 +938,6 @@ void dlio::OdomNode::callbackGpsPose(const geometry_msgs::msg::PoseWithCovarianc
     this->first_gps_pose_recieved = true;
   }
 
-  std::cout << "recieved gps pose at " << this->gps_position.stamp << std::endl;
-  printf("gps pose: %f %f %f \n", this->gps_position.p[0], this->gps_position.p[1], this->gps_position.p[2]);
   this->T_gps.block(0, 3, 3, 1) = this->gps_position.p;
 }
 
@@ -963,17 +945,12 @@ void dlio::OdomNode::callbackGpsDenied(const std_msgs::msg::Bool::SharedPtr gps_
   // If switch from denied to available zone
   if ((this->gps_denied && !gps_denied->data) || this->gps_switched_on == 1) {
     this->gps_switched_on += 1;
-    std::cout << "recieved gps signal: switched!!" << std::endl;
   }
 
   if (!this->gps_started)
     gps_started = true;
 
   this->gps_denied = gps_denied->data;
-  if (this->gps_denied)
-    printf("gps is denied\n");
-  else
-    printf("gps is not denied\n");
 }
 
 void dlio::OdomNode::callbackGpsOrientation(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr gps) {
@@ -988,8 +965,6 @@ void dlio::OdomNode::callbackGpsOrientation(const geometry_msgs::msg::PoseWithCo
     // this->lidarPose.q = this->gps_orientation.q;
     // this->state.q = this->gps_orientation.q;
   }
-  std::cout << "recieved gps orientation at " << this->gps_orientation.stamp << std::endl;
-  printf("gps orient: %f %f %f %f\n", this->gps_orientation.q.w(), this->gps_orientation.q.x(), this->gps_orientation.q.y(), this->gps_orientation.q.z());
   this->T_gps.block(0,0,3,3) = this->imu_meas.q.toRotationMatrix();
 
 }
@@ -1003,10 +978,7 @@ void dlio::OdomNode::callbackImu(const sensor_msgs::msg::Imu::SharedPtr imu_raw)
       return;
   }
 
-  printf("raw imu is %f %f %f \n", imu_raw->linear_acceleration.x, imu_raw->linear_acceleration.y, imu_raw->linear_acceleration.z);
-
   sensor_msgs::msg::Imu::SharedPtr imu = this->transformImu( imu_raw );
-  printf("raw imu after init transform is %f %f %f \n", imu->linear_acceleration.x, imu->linear_acceleration.y, imu->linear_acceleration.z);
 
   this->imu_stamp = imu->header.stamp;
   double imu_stamp_secs = rclcpp::Time(imu->header.stamp).seconds();
@@ -1159,7 +1131,6 @@ void dlio::OdomNode::callbackImu(const sensor_msgs::msg::Imu::SharedPtr imu_raw)
     this->imu_meas.q.x() = imu_raw->orientation.x;
     this->imu_meas.q.y() = imu_raw->orientation.y;
     this->imu_meas.q.z() = imu_raw->orientation.z;
-    printf("recieved imu orientation %f %f %f %f \n", this->imu_meas.q.w(), this->imu_meas.q.x(), this->imu_meas.q.y(), this->imu_meas.q.z());
 
     // Store calibrated IMU measurements into imu buffer for manual integration later.
     this->mtx_imu.lock();
@@ -1447,9 +1418,6 @@ void dlio::OdomNode::propagateGICP() {
 
   Eigen::Quaternionf q(rotSO3);
 
-  printf("in propagate Gicp lidar pose is %f %f %f \n", t(0,3), t(1,3), t(2,3));
-  printf("gicp lidar orient is %f %f %f %f \n", q.w(), q.x(), q.y(), q.z());
-
   if (!this->gps_denied) {
     p = this->gps_position.p;
 
@@ -1458,14 +1426,11 @@ void dlio::OdomNode::propagateGICP() {
       // double time_now = this->get_clock()->now().seconds();
       double time_now = this->imu_stamp.seconds();
       double dt_gps = time_now - this->gps_position.stamp;
-      printf("dt_gps %f\n", dt_gps);
-      printf("time now: %f , time gps_local %f , time_gps_real %f \n", time_now, last_gps_recorded_local_time, this->gps_position.stamp);
+
       if (dt_gps > 0.06) {
-        printf("dt_gps too large, using calc trans\n");
         p << t(0,3), t(1,3), t(2,3);
       } else if (dt_gps > 0) {
         p += this->state.v.lin.w * dt_gps; //possibly bad if velocity wrong but clean gps
-        printf("gicp position, predicted p %f %f %f \n", p[0], p[1], p[2]);
       }
     }
     // Eigen::Quaternionf omega;
@@ -1512,20 +1477,16 @@ void dlio::OdomNode::propagateState() {
 
   // Transform accel from body to world frame
   world_accel = qhat._transformVector(this->imu_meas.lin_accel);
-  std::cout << "body accel after bias correc.: " << imu_meas.lin_accel[0] << " " << imu_meas.lin_accel[1] << " " << imu_meas.lin_accel[2] << std::endl;
-  std::cout << "world accel: " << world_accel[0] << " " << world_accel[1] << " " << world_accel[2] << std::endl;
 
   // Accel propogation
   this->state.p[0] += this->state.v.lin.w[0]*dt + 0.5*dt*dt*world_accel[0];
   this->state.p[1] += this->state.v.lin.w[1]*dt + 0.5*dt*dt*world_accel[1];
   this->state.p[2] += this->state.v.lin.w[2]*dt + 0.5*dt*dt*(world_accel[2] - this->gravity_);
-  printf("new state after imu propogate: %f %f %f \n", this->state.p[0], this->state.p[1], this->state.p[2]);
 
   this->state.v.lin.w[0] += world_accel[0]*dt;
   this->state.v.lin.w[1] += world_accel[1]*dt;
   this->state.v.lin.w[2] += (world_accel[2] - this->gravity_)*dt; 
   this->state.v.lin.b = this->state.q.toRotationMatrix().inverse() * this->state.v.lin.w;
-  printf("new lin v after imu propogate: %f %f %f \n", this->state.v.lin.b[0], this->state.v.lin.b[1], this->state.v.lin.b[2]);
   // Gyro propogation
   omega.w() = 0;
   omega.vec() = this->imu_meas.ang_vel;
@@ -1626,20 +1587,8 @@ void dlio::OdomNode::updateState() {
  
 
   double e_norm = err.norm();
-  if (e_norm > 5) {
-    printf("large err!: err_norm is %f \n", e_norm);
-  }
-  printf("err: %f %f %f \n", err[0], err[1], err[2]);
-  printf("err_body: %f %f %f \n", err_body[0], err_body[1], err_body[2]);
 
   // Update state
-
-  if (!this->gps_denied) {
-    std::cout << " using gps to update state" << std::endl;
-  }
-  else {
-    std::cout << " gps unavailable to update state" << std::endl;
-  }
 
   // std::cout << "in update state err_body:  before first update to accel b " << this->state.b.accel << std::endl;
   double abias_max = this->geo_abias_max_;
@@ -1648,7 +1597,6 @@ void dlio::OdomNode::updateState() {
   // Update accel bias and linear vel
   if (this->gps_switched_on == 2) {
     // If gps available, reset biases and velocity from dropout zone
-    std::cout << "in update state on switch, reset biases" << std::endl;
     this->state.p = pin;
     this->state.q = this->imu_meas.q;
     this->lidarPose.p = this->state.p;
@@ -1658,12 +1606,7 @@ void dlio::OdomNode::updateState() {
     this->state.b.accel = Eigen::Vector3f(0., 0., 0.);
 
     double dt_gps = this->gps_position.stamp - this->gps_position_prev.stamp;
-    printf("prev gps %f, curr gps stamp %f \n", this->gps_position.stamp, this->gps_position_prev.stamp);
     this->state.v.lin.w = (this->gps_position.p - this->gps_position_prev.p) / 0.05;
-
-    printf("dt_gps is %f, new world lin v is %f %f %f \n", dt_gps, state.v.lin.w[0], state.v.lin.w[1], state.v.lin.w[2]);
-    printf("prev_gps_pos is %f %f %f \n", gps_position_prev.p[0], gps_position_prev.p[1], gps_position_prev.p[2]);
-    printf("curr_gps_pos is %f %f %f \n", gps_position.p[0], gps_position.p[1], gps_position.p[2]);
 
     this->state.v.lin.b = this->state.q.toRotationMatrix().inverse() * this->state.v.lin.w;
 
@@ -1687,7 +1630,6 @@ void dlio::OdomNode::updateState() {
     this->state.v.lin.w += dt * this->geo_Kv_ * err;
     this->state.v.lin.b = this->state.q.toRotationMatrix().inverse() * this->state.v.lin.w;
   }
-  printf("new body lin v in updateState is %f %f %f \n", state.v.lin.b[0], state.v.lin.b[1], state.v.lin.b[2]);
 
   // Update gyro bias
   // if (this->new_gps_orientation) {
@@ -1708,10 +1650,6 @@ void dlio::OdomNode::updateState() {
   this->geo.prev_p = this->state.p;
   this->geo.prev_q = this->state.q;
   this->geo.prev_vel = this->state.v.lin.w;
-  std::cout << "state pos: " << this->state.p << std::endl;
-  std::cout << "state orient: " << this->state.q << std::endl;
-  std::cout << "lidar pos: " << this->lidarPose.p << std::endl;
-  std::cout << "lidar orient: " << this->lidarPose.q << std::endl;
 }
 
 sensor_msgs::msg::Imu::SharedPtr dlio::OdomNode::transformImu(const sensor_msgs::msg::Imu::SharedPtr& imu_raw) {
@@ -1746,7 +1684,6 @@ sensor_msgs::msg::Imu::SharedPtr dlio::OdomNode::transformImu(const sensor_msgs:
                             imu_raw->linear_acceleration.z);
 
   Eigen::Vector3f lin_accel_cg = this->extrinsics.baselink2imu.R * lin_accel;
-  printf("lin_accel_cg pre addition is %f %f %f \n", lin_accel_cg[0], lin_accel_cg[1], lin_accel_cg[2]);
   lin_accel_cg = lin_accel_cg
                  + ((ang_vel_cg - ang_vel_cg_prev) / dt).cross(-this->extrinsics.baselink2imu.t)
                  + ang_vel_cg.cross(ang_vel_cg.cross(-this->extrinsics.baselink2imu.t));
@@ -2114,7 +2051,6 @@ void dlio::OdomNode::buildSubmap(State vehicle_state) {
 }
 
 void dlio::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
-  cout << " in build keyframes and submap" << endl;
   if (this->run_mode_ >= 1) {
     // transform the new keyframe(s) and associated covariance list(s)
     std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
